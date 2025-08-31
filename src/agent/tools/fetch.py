@@ -1,24 +1,68 @@
 from agent.core.state import VideoMeta
-import imageio_ffmpeg
 import re
 import yt_dlp
 from agent.errors import ToolError
+from urllib.parse import urlparse, parse_qs, urlencode
 
 def fetch_task(state,fetch_name,input):
     
-    
 
-    def extract_url(text):
-        youtube_pattern = r'https?://(?:www\.|m\.)?(?:youtube\.com/watch\?v=|youtu\.be/)[\w-]+'
-    
-        # Search for the first match
-        match = re.search(youtube_pattern, text)
-        
-        if match:
-            return match.group(0)
-        
-        else:
-            return None
+    def extract_url(text: str) -> str | None:
+        """
+        Extract and normalize the first YouTube URL from a string.
+
+        Returns:
+            str: Canonical YouTube watch URL (e.g. https://www.youtube.com/watch?v=ID[&t=xx])
+            None: if no valid YouTube URL found
+        """
+        # Regex to find any URL in text
+        url_pattern = r'(https?://[^\s]+|www\.[^\s]+)'
+        matches = re.findall(url_pattern, text)
+
+        for url in matches:
+            # Ensure scheme
+            if url.startswith("www."):
+                url = "https://" + url
+
+            parsed = urlparse(url)
+
+            # Accept only youtube domains
+            if not any(host in parsed.netloc for host in ["youtube.com", "youtu.be"]):
+                continue
+
+            video_id = None
+            timestamp = None
+
+            # Case 1: normal watch URL → youtube.com/watch?v=VIDEO_ID
+            if "youtube.com" in parsed.netloc and parsed.path == "/watch":
+                qs = parse_qs(parsed.query)
+                if "v" in qs:
+                    video_id = qs["v"][0]
+                if "t" in qs:
+                    timestamp = qs["t"][0]
+
+            # Case 2: youtu.be short link → youtu.be/VIDEO_ID
+            elif "youtu.be" in parsed.netloc:
+                video_id = parsed.path.lstrip("/")
+                qs = parse_qs(parsed.query)
+                if "t" in qs:
+                    timestamp = qs["t"][0]
+
+            # Case 3: embed or /v/ links
+            elif "youtube.com" in parsed.netloc and parsed.path.startswith(("/embed/", "/v/")):
+                video_id = parsed.path.split("/")[-1]
+                qs = parse_qs(parsed.query)
+                if "t" in qs:
+                    timestamp = qs["t"][0]
+
+            if video_id:
+                # Rebuild canonical URL
+                base_url = f"https://www.youtube.com/watch?v={video_id}"
+                if timestamp:
+                    return f"{base_url}&t={timestamp}"
+                return base_url
+
+        return None
     
     
     
@@ -40,9 +84,9 @@ def fetch_task(state,fetch_name,input):
         url = extract_url(input)
         if url is None: raise ToolError("Invalid YouTube URL: expected youtube.com or youtu.be")
 
-        if(is_downloadable(url)):
+        if is_downloadable(url):
 
-            # yt-dlp options
+            #  yt-dlp options
             
             ydl_opts = {
             'quiet': True,
@@ -56,9 +100,9 @@ def fetch_task(state,fetch_name,input):
                 # Metadata variables
                 title = info.get("title")
                 source_url = info.get("webpage_url")
-                duration = info.get("duration")  # in seconds
+                duration = int(info.get("duration"))  # in seconds
                 video_id = info.get("id")
-                
+
 
                 state.video = VideoMeta(
 
@@ -74,7 +118,7 @@ def fetch_task(state,fetch_name,input):
             raise ToolError("Video not downloadable")
 
     except Exception as e:
-        raise ToolError("Exception when calling TasksApi->fetch_task: {e}")
+        raise ToolError(f"Exception when calling TasksApi->fetch_task: {e}")
 
             
 
