@@ -2,8 +2,44 @@
 
 import os
 import yaml
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 from agent.core.state import Config
+
+
+# Audio extraction configuration (used by tools.extract)
+@dataclass
+class ExtractAudioConfig:
+    # Target
+    sample_rate: int = 16000
+    mono: bool = True
+    format: str = "wav"  # always wav for ASR
+
+    # Normalization / processing
+    normalize: bool = True
+    loudnorm_ebu: bool = True
+    target_lufs: float = -23.0  # EBU R128 target range -23 to -16
+    max_peak_dbfs: float = -1.0  # limiter ceiling
+    silence_trim: bool = False
+    silence_threshold_db: float = -40.0  # head/tail trim threshold
+    silence_min_ms: int = 800
+
+    # Limits and offsets
+    max_duration_sec: Optional[int] = None  # None => no cap
+    start_offset_sec: float = 0.0
+    end_offset_sec: Optional[float] = None
+
+    # Chunking (YouTube summarizer defaults)
+    chunk_strategy: str = "duration"  # none | duration | vad
+    chunk_duration_sec: int = 420     # 7 minutes per chunk by default
+    chunk_overlap_sec: float = 1.5    # 1–2s overlap to avoid boundary cuts
+    chunk_max_sec: int = 480          # VAD upper bound when used
+
+    # IO & cache
+    io_cache_dir: Optional[Path] = None
+    io_tmp_dir: Optional[Path] = None
+    force: bool = False
 
 
 def load_config(profile: str = "default") -> Config:
