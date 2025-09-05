@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,6 +104,7 @@ def _transcribe_chunk_azure(
     region: Optional[str] = None,
     endpoint: Optional[str] = None,
     language: str = "en-US",
+    timeout_sec: Optional[float] = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
     try:
         import azure.cognitiveservices.speech as speechsdk  # type: ignore
@@ -170,7 +172,19 @@ def _transcribe_chunk_azure(
     recognizer.session_stopped.connect(stop_cb)  # type: ignore[attr-defined]
 
     recognizer.start_continuous_recognition()
-    done.wait()
+    if timeout_sec and timeout_sec > 0:
+        completed = done.wait(timeout=timeout_sec)
+        if not completed:
+            try:
+                recognizer.stop_continuous_recognition()
+            except Exception:
+                pass
+            raise ToolError(
+                f"Azure transcription timed out after {timeout_sec:.1f}s",
+                tool_name="transcribe_asr",
+            )
+    else:
+        done.wait()
 
     # Handle quota/limit errors explicitly
     details = (cancel_info.get("error_details") or "").lower()
@@ -191,6 +205,17 @@ def _transcribe_chunk_azure(
     return transcript_text.strip(), results
 
 
+def _is_transient_quota_error(msg: str) -> bool:
+    m = msg.lower()
+    return (
+        "too many requests" in m
+        or "429" in m
+        or ("quota" in m and ("exceed" in m or "exceeded" in m or "insufficient" in m))
+        or "rate limit" in m
+        or "throttle" in m
+    )
+
+
 def transcribe_task(
     state: AgentState,
     tool_name: str = "transcribe_asr",
@@ -200,6 +225,7 @@ def transcribe_task(
     azure_key: Optional[str] = None,
     azure_region: Optional[str] = None,
     azure_endpoint: Optional[str] = None,
+    azure_concurrency: Optional[int] = None,
 ) -> List[Chunk]:
     """
     Transcribe previously extracted audio chunks using Azure Speech-to-Text.
@@ -280,6 +306,13 @@ def transcribe_task(
             tool_name=tool,
         )
 
+    # Concurrency + retry settings
+    concurrency = int(azure_concurrency or int(os.getenv("AZURE_SPEECH_CONCURRENCY", "2") or 2))
+    retries = int(os.getenv("AZURE_SPEECH_RETRIES", "2") or 2)
+    backoff_base = float(os.getenv("AZURE_SPEECH_BACKOFF", "2.0") or 2.0)
+    timeout_factor = float(os.getenv("AZURE_SPEECH_TIMEOUT_FACTOR", "2.0") or 2.0)
+    min_timeout = float(os.getenv("AZURE_SPEECH_TIMEOUT_MIN", "45") or 45)
+
     chunks_out: List[Chunk] = []
     artifacts: Dict[str, Any] = {
         "manifest_path": str(manifest_p),
@@ -309,6 +342,9 @@ def transcribe_task(
                 data[month] = {"minutes": float(delta_min)}
         _save_usage(usage_path, data)
 
+
+    # Prepare work items
+    work_items: List[Dict[str, Any]] = []
     for ch in chunk_meta:
         wav_path = ch.get("path")
         if not wav_path or not Path(wav_path).exists():
@@ -316,48 +352,105 @@ def transcribe_task(
         idx = int(ch.get("idx", 0))
         start_s = float(ch.get("start_sec", 0.0))
         end_s = float(ch.get("end_sec", max(start_s, 0.0)))
-        duration_min = max(0.0, (end_s - start_s) / 60.0)
+        dur_s = max(0.0, end_s - start_s)
+        work_items.append({
+            "idx": idx,
+            "wav_path": wav_path,
+            "start_s": start_s,
+            "end_s": end_s,
+            "dur_s": dur_s,
+        })
 
-        try:
-            text, raw = _transcribe_chunk_azure(
-                wav_path,
-                subscription_key=key,
-                region=region,
-                endpoint=endpoint,
-                language=language,
-            )
-        except ToolError:
-            raise
-        except Exception as e:
-            raise ToolError(f"Azure transcription failed for chunk {idx}: {e}", tool_name=tool)
+    # Concurrency executor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        # Persist per-chunk transcript and raw events
-        txt_path = out_dir / f"chunk_{idx:04d}.azure.txt"
-        json_path = out_dir / f"chunk_{idx:04d}.azure.json"
-        try:
-            with open(txt_path, "w", encoding="utf-8") as f:
-                f.write((text or "").strip() + "\n")
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump({"results": raw}, f)
-        except Exception:
-            # Do not fail the whole run on IO errors; continue
-            pass
+    def do_one(item: Dict[str, Any]) -> Tuple[int, str, List[Dict[str, Any]], Path, Path]:
+        idx = item["idx"]
+        wav_path = item["wav_path"]
+        dur_s = float(item["dur_s"]) or 0.0
+        timeout = max(min_timeout, (dur_s * timeout_factor) + 20.0)
 
+        last_err: Optional[Exception] = None
+        for attempt in range(retries + 1):
+            try:
+                text, raw = _transcribe_chunk_azure(
+                    wav_path,
+                    subscription_key=key,
+                    region=region,
+                    endpoint=endpoint,
+                    language=language,
+                    timeout_sec=timeout,
+                )
+                # Write files per chunk
+                txt_path = out_dir / f"chunk_{idx:04d}.azure.txt"
+                json_path = out_dir / f"chunk_{idx:04d}.azure.json"
+                try:
+                    with open(txt_path, "w", encoding="utf-8") as f:
+                        f.write((text or "").strip() + "\n")
+                    with open(json_path, "w", encoding="utf-8") as f:
+                        json.dump({"results": raw}, f)
+                except Exception:
+                    pass
+                return idx, text or "", raw, txt_path, json_path
+            except ToolError as e:
+                msg = str(e)
+                last_err = e
+                if _is_transient_quota_error(msg) and attempt < retries:
+                    backoff = backoff_base * (2 ** attempt)
+                    time.sleep(backoff)
+                    continue
+                raise
+            except Exception as e:
+                last_err = e
+                if attempt < retries:
+                    backoff = backoff_base * (2 ** attempt)
+                    time.sleep(backoff)
+                    continue
+                raise ToolError(f"Azure transcription failed for chunk {idx}: {e}", tool_name=tool)
+
+        # Should not reach here
+        raise ToolError(f"Azure transcription failed for chunk {idx}: {last_err}", tool_name=tool)
+
+    total_success_min = 0.0
+    results: List[Tuple[int, str, List[Dict[str, Any]], Path, Path]] = []
+    errors: List[Tuple[int, str]] = []
+    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
+        future_map = {ex.submit(do_one, it): it for it in work_items}
+        for fut in as_completed(future_map):
+            it = future_map[fut]
+            idx = it["idx"]
+            try:
+                idx2, text, raw, txt_path, json_path = fut.result()
+                # Record artifacts
+                artifacts["chunks"].append(
+                    {
+                        "idx": idx2,
+                        "start_sec": it["start_s"],
+                        "end_sec": it["end_s"],
+                        "text_path": str(txt_path),
+                        "json_path": str(json_path),
+                        "chars": len(text or ""),
+                    }
+                )
+                total_success_min += float(it["dur_s"]) / 60.0
+                results.append((idx2, text, raw, txt_path, json_path))
+            except Exception as e:
+                errors.append((idx, str(e)))
+
+    if errors:
+        errs = "; ".join([f"chunk {i}: {m}" for i, m in errors])
+        raise ToolError(f"One or more chunks failed: {errs}", tool_name=tool)
+
+    # Build combined transcript and state in index order
+    results.sort(key=lambda r: r[0])
+    idx_to_bounds = {it["idx"]: (it["start_s"], it["end_s"]) for it in work_items}
+    for idx, text, raw, _, _ in results:
+        s, e = idx_to_bounds.get(idx, (0, 0))
         combined_text_parts.append(text.strip() if text else "")
-        chunks_out.append(Chunk(start_s=int(start_s), end_s=int(end_s), text=text or ""))
-        artifacts["chunks"].append(
-            {
-                "idx": idx,
-                "start_sec": start_s,
-                "end_sec": end_s,
-                "text_path": str(txt_path),
-                "json_path": str(json_path),
-                "chars": len(text or ""),
-            }
-        )
+        chunks_out.append(Chunk(start_s=int(s), end_s=int(e), text=text or ""))
 
-        # Update usage ledger per successful chunk
-        _add_usage(duration_min)
+    # Update usage ledger once per run
+    _add_usage(total_success_min)
 
     combined_text = "\n\n".join([p for p in combined_text_parts if p])
 

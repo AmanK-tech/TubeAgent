@@ -214,3 +214,6 @@ runtime/**
 !runtime/.gitignore
 
 /cleanup_runtime.py
+
+/local_check_transcribe.py
+

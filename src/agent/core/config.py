@@ -30,11 +30,11 @@ class ExtractAudioConfig:
     start_offset_sec: float = 0.0
     end_offset_sec: Optional[float] = None
 
-    # Chunking (YouTube summarizer defaults)
+    # Chunking (tuned for faster turnaround)
     chunk_strategy: str = "duration"  # none | duration | vad
-    chunk_duration_sec: int = 420     # 7 minutes per chunk by default
-    chunk_overlap_sec: float = 1.5    # 1–2s overlap to avoid boundary cuts
-    chunk_max_sec: int = 480          # VAD upper bound when used
+    chunk_duration_sec: int = 150     # ~2.5 minutes per chunk by default
+    chunk_overlap_sec: float = 1.0    # small overlap to avoid cuts
+    chunk_max_sec: int = 180          # VAD upper bound to prevent long runs
 
     # IO & cache
     io_cache_dir: Optional[Path] = None
