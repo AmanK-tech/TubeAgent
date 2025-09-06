@@ -12,7 +12,7 @@ def summarise_chunk(state, chunk, user_req):
 
     system_instruction = Path("src/agent/prompts/chunk_prompt.txt").read_text(encoding="utf-8")
 
-    generation_config = types.GenerationConfig(max_output_tokens=state.config.max_tokens)
+    # In google-genai, max_output_tokens lives directly on GenerateContentConfig
 
     # Build a single user message with both the request and grounded transcript
     start_s = getattr(chunk, "start_s", None)
@@ -31,16 +31,15 @@ def summarise_chunk(state, chunk, user_req):
         model=model,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
-            generation_config=generation_config,
+            max_output_tokens=state.config.max_tokens,
         ),
         contents=[
             types.Content(
                 role="user",
-                parts=[types.Part.from_text(content_text)],
+                parts=[types.Part(text=content_text)],
             )
         ],
     )
 
     res = response.text
     return res
-

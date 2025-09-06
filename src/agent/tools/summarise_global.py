@@ -111,12 +111,12 @@ def summarise_global(state, user_req):
         model=model,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
-            generation_config=types.GenerationConfig(max_output_tokens=state.config.max_tokens),
+            max_output_tokens=state.config.max_tokens,
         ),
         contents=[
             types.Content(
                 role="user",
-                parts=[types.Part.from_text(content_text)],
+                parts=[types.Part(text=content_text)],
             )
         ],
     )
