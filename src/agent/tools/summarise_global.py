@@ -1,10 +1,9 @@
-from google import genai
-from google.genai import types
 from pathlib import Path
 import os
 
 from agent.errors import ToolError
 from agent.tools.summarise_chunks import summarise_chunk
+from agent.llm.client import LLMClient
 
 
 def _fmt_ts(seconds: float | int | None) -> str:
@@ -30,8 +29,8 @@ def summarise_global(state, user_req):
     - Returns the final generated text and records minimal artifacts.
     """
     model = state.config.model
-    key = getattr(state.config, "api_key", None) or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-    client = genai.Client(api_key=key) if key else genai.Client()
+    key = getattr(state.config, "api_key", None) or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+    llm = LLMClient(provider=state.config.provider, model=model, api_key=key)
 
     system_instruction = Path("src/agent/prompts/global_prompt.txt").read_text(encoding="utf-8")
 
@@ -51,24 +50,72 @@ def summarise_global(state, user_req):
                 self.summary = None
         chunks = [_PseudoChunk(transcript)]
 
+    # Attempt to map chunks back to transcribe artifacts to discover indices/paths
+    art = getattr(state, "artifacts", {}) or {}
+    ta = art.get("transcribe_asr", {}) if isinstance(art.get("transcribe_asr"), dict) else {}
+    ta_chunks = ta.get("chunks", []) if isinstance(ta.get("chunks"), list) else []
+    bounds_to_info = {}
+    out_dir = None
+    try:
+        for ent in ta_chunks:
+            s = int(float(ent.get("start_sec", 0) or 0))
+            e = int(float(ent.get("end_sec", 0) or 0))
+            idx = int(ent.get("idx", 0))
+            tp = ent.get("text_path")
+            if tp:
+                out_dir = out_dir or Path(tp).parent
+            bounds_to_info[(s, e)] = {"idx": idx, "out_dir": Path(tp).parent if tp else None}
+    except Exception:
+        bounds_to_info = {}
+
     # Build or use per-chunk local outputs
     local_outputs = []
     used_generated = 0
+    used_loaded = 0
+    # Optional: skip calling per-chunk summariser and rely on raw excerpts only
+    skip_chunk_calls = str(os.getenv("SUMMARISE_GLOBAL_SKIP_CHUNK_CALLS", "0")).strip() in {"1", "true", "yes"}
+    # Excerpt length (chars) for grounding; smaller -> less prompt cost
+    try:
+        excerpt_len = int(os.getenv("GLOBAL_EXCERPT_CHARS", "400") or 400)
+    except Exception:
+        excerpt_len = 400
     for i, ch in enumerate(chunks, start=1):
-        # Use existing summary if present, else generate now
+        # Use existing summary if present, else generate now (unless skipping)
         summary_text = getattr(ch, "summary", None)
+        # Try loading a cached on-disk summary if we can map this chunk
         if not summary_text:
-            summary_text = summarise_chunk(state, ch, user_req)
+            info = bounds_to_info.get((int(getattr(ch, "start_s", 0) or 0), int(getattr(ch, "end_s", 0) or 0)))
+            if info and info.get("out_dir") is not None:
+                idx0 = int(info.get("idx", i - 1))
+                cand = info["out_dir"] / f"chunk_{idx0:04d}.summary.txt"
+                try:
+                    if cand.exists():
+                        summary_text = cand.read_text(encoding="utf-8").strip()
+                        used_loaded += 1
+                except Exception:
+                    pass
+        # Generate if still missing
+        if not summary_text and not skip_chunk_calls:
+            summary_text = summarise_chunk(state, ch, user_req, llm=llm)
             # Try to persist back to state for downstream visibility
             try:
                 ch.summary = summary_text
                 used_generated += 1
             except Exception:
                 pass
+            # Also persist to disk if we know the output dir and chunk idx
+            try:
+                info = bounds_to_info.get((int(getattr(ch, "start_s", 0) or 0), int(getattr(ch, "end_s", 0) or 0)))
+                if info and info.get("out_dir") is not None:
+                    idx0 = int(info.get("idx", i - 1))
+                    sp = info["out_dir"] / f"chunk_{idx0:04d}.summary.txt"
+                    sp.write_text((summary_text or "").strip() + "\n", encoding="utf-8")
+            except Exception:
+                pass
 
         # Prepare a short raw excerpt to aid global synthesis without huge context
         raw_text = (getattr(ch, "text", None) or "").strip()
-        excerpt = raw_text[:800]  # keep inputs bounded
+        excerpt = raw_text[: max(0, excerpt_len)]  # keep inputs bounded
 
         local_outputs.append(
             {
@@ -107,21 +154,7 @@ def summarise_global(state, user_req):
 
     content_text = "\n".join(header + parts)
 
-    response = client.models.generate_content(
-        model=model,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            max_output_tokens=state.config.max_tokens,
-        ),
-        contents=[
-            types.Content(
-                role="user",
-                parts=[types.Part(text=content_text)],
-            )
-        ],
-    )
-
-    result_text = response.text
+    result_text = llm.generate(system_instruction=system_instruction, user_text=content_text, max_output_tokens=state.config.max_tokens)
 
     # Record minimal artifacts for observability
     try:
@@ -130,6 +163,7 @@ def summarise_global(state, user_req):
             {
                 "chunks_used": len(local_outputs),
                 "generated_chunk_summaries": used_generated,
+                "loaded_cached_summaries": used_loaded,
                 "result_chars": len(result_text or ""),
             }
         )

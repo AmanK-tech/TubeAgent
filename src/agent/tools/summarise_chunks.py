@@ -1,18 +1,18 @@
-from google import genai
-from google.genai import types
 from pathlib import Path
 import os
 
-def summarise_chunk(state, chunk, user_req):
+from agent.llm.client import LLMClient
+
+
+def summarise_chunk(state, chunk, user_req, *, llm: LLMClient | None = None):
     provider = state.config.provider
     model = state.config.model
-    key = getattr(state.config, "api_key", None) or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    key = getattr(state.config, "api_key", None) or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
     text = chunk.text
-    client = genai.Client(api_key=key) if key else genai.Client()
+    # Reuse a provided LLM client or build one from state
+    llm = llm or LLMClient(provider=provider, model=model, api_key=key)
 
     system_instruction = Path("src/agent/prompts/chunk_prompt.txt").read_text(encoding="utf-8")
-
-    # In google-genai, max_output_tokens lives directly on GenerateContentConfig
 
     # Build a single user message with both the request and grounded transcript
     start_s = getattr(chunk, "start_s", None)
@@ -27,19 +27,5 @@ def summarise_chunk(state, chunk, user_req):
         "Transcript:\n" + (text or "")
     )
 
-    response = client.models.generate_content(
-        model=model,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            max_output_tokens=state.config.max_tokens,
-        ),
-        contents=[
-            types.Content(
-                role="user",
-                parts=[types.Part(text=content_text)],
-            )
-        ],
-    )
-
-    res = response.text
-    return res
+    res = llm.generate(system_instruction=system_instruction, user_text=content_text, max_output_tokens=state.config.max_tokens)
+    return res or ""
