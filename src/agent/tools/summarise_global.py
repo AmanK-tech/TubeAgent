@@ -4,7 +4,7 @@ from pathlib import Path
 import os
 
 from agent.errors import ToolError
-from agent.tools.summarize_chunks import summarise_chunk
+from agent.tools.summarise_chunks import summarise_chunk
 
 
 def _fmt_ts(seconds: float | int | None) -> str:
