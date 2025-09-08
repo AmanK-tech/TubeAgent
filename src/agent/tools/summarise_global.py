@@ -21,12 +21,21 @@ def _fmt_ts(seconds: float | int | None) -> str:
 
 def summarise_global(state, user_req):
     """
-    Produce a final, global deliverable by synthesizing across all transcript chunks.
+    Produce a final deliverable by synthesizing across transcript chunks (and cached summaries).
 
-    - Prefers existing per-chunk summaries on state.chunks[].summary.
-    - If a summary is missing, calls summarise_chunk() to generate it.
-    - Sends chunk-level outputs (and small raw excerpts) to the global prompt.
-    - Returns the final generated text and records minimal artifacts.
+    Example call:
+
+        summarise_global(state, "Write a coherent global summary across all chunks.")
+
+    Args:
+        state (AgentState): Agent state with `chunks` and/or combined `transcript`.
+        user_req (str): Instruction/request describing the desired final output.
+
+    Returns:
+        str: The final global text. Also records minimal stats in `state.artifacts["summarise_global"]`.
+
+    Raises:
+        ToolError: If neither chunks nor a combined transcript are available.
     """
     model = state.config.model
     key = getattr(state.config, "api_key", None) or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")

@@ -102,13 +102,36 @@ def emit_output(
     tool_name: str = "emit_output",
 ) -> Dict[str, Any]:
     """
-    Turn the model's final text (and any structured side data) into clean, consumable
-    deliverables and persist them where your workflow expects.
+    Turn the model’s final text (and optional structured side data) into clean, consumable
+    deliverables and persist/announce them as part of the workflow.
 
-    - Formats: Markdown (.md), plain text (.txt), and JSON bundle (.json)
-    - Targets: file (always supported), console (prints a short preview), api (POST to webhook_url)
-    - Records outputs under state.artifacts[tool_name]
-    - Returns a dict summary with written paths and basic metadata
+    Example call:
+
+        emit_output(
+            state,
+            result_text,
+            side_data=state.artifacts.get("summarise_global"),
+            formats=["md", "json"],
+            targets=["file", "console"],
+        )
+
+    Args:
+        state (AgentState): Mutable agent state; used to choose default output directory and to store artifacts.
+        text (str | None): Final text to persist. Must be non-empty.
+        side_data (dict[str, Any] | None): Optional structured bundle to include in the JSON output.
+        formats (list[str] | None): One or more of {"md","txt","json"}. Defaults to ["md"].
+        targets (list[str] | None): Any of {"file","console","api"}. Defaults to ["file","console"].
+        filename (str | None): Base filename (stem or name with extension). Auto-derived from video metadata if omitted.
+        out_dir (str | None): Output directory. Defaults to the transcription output folder or runtime/outputs.
+        preview_chars (int): Characters to print in the console preview. Default 1200.
+        webhook_url (str | None): If provided and "api" target is included, POSTs a JSON payload to this URL.
+        tool_name (str): Artifact namespace key. Default "emit_output".
+
+    Returns:
+        dict[str, Any]: Summary including `primary_path`, `outputs` (by format), `dir`, `meta`, and optional `api` result.
+
+    Raises:
+        ToolError: If `text` is empty.
     """
     if not text or not str(text).strip():
         raise ToolError("emit_output requires non-empty text", tool_name=tool_name)

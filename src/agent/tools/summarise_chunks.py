@@ -5,6 +5,25 @@ from agent.llm.client import LLMClient
 
 
 def summarise_chunk(state, chunk, user_req, *, llm: LLMClient | None = None):
+    """
+    Generate a concise summary for a single transcript chunk using the configured LLM.
+
+    Example call:
+
+        summarise_chunk(state, chunk, "Summarize this chunk clearly and concisely.")
+
+    Args:
+        state (AgentState): Agent state providing provider/model/max_tokens via `state.config`.
+        chunk (Chunk): Transcript chunk with `text` and optional `start_s`/`end_s`.
+        user_req (str): Instruction or request to guide the summary content and style.
+        llm (LLMClient, optional): Reused client instance; built from state if not provided.
+
+    Returns:
+        str: The generated summary text.
+
+    Raises:
+        ToolError: If LLM provider configuration is invalid or the request fails.
+    """
     provider = state.config.provider
     model = state.config.model
     key = getattr(state.config, "api_key", None) or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")

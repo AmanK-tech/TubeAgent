@@ -228,13 +228,33 @@ def transcribe_task(
     azure_concurrency: Optional[int] = None,
 ) -> List[Chunk]:
     """
-    Transcribe previously extracted audio chunks using Azure Speech-to-Text.
+    Transcribe previously extracted audio chunks using Azure Speech‑to‑Text.
 
-    - Expects chunk info from the extract manifest referenced in state.artifacts["extract_audio"],
-      or the latest manifest under runtime/cache/extract, or an explicit manifest_path.
-    - Writes per-chunk transcripts and a combined transcript alongside the manifest.
-    - Updates state.chunks, state.transcript, and state.artifacts[tool_name].
-    - Raises ToolError on failures.
+    Example call:
+
+        transcribe_task(
+            state,
+            tool_name="transcribe_asr",
+            language="en-US",
+            azure_key="<KEY>",
+            azure_region="eastus",
+        )
+
+    Args:
+        state (AgentState): Agent state; uses extract manifest from artifacts or `manifest_path`.
+        tool_name (str): Tool label; default "transcribe_asr".
+        language (str): Recognition language code (e.g., "en-US").
+        manifest_path (str, optional): Explicit path to an extract manifest JSON.
+        azure_key (str, optional): Azure Speech key; falls back to AZURE_SPEECH_KEY env.
+        azure_region (str, optional): Azure region; required if no endpoint. Falls back to AZURE_SPEECH_REGION.
+        azure_endpoint (str, optional): Full endpoint URL; overrides region.
+        azure_concurrency (int, optional): Parallel recognizers; defaults from AZURE_SPEECH_CONCURRENCY or 2.
+
+    Returns:
+        list[Chunk]: Transcript chunks with text and time bounds. Also updates `state.transcript` and artifacts.
+
+    Raises:
+        ToolError: If no manifest is found, credentials are missing, free tier is exceeded, or chunks fail.
     """
     tool = tool_name or "transcribe_asr"
 

@@ -60,6 +60,32 @@ def extract_audio_task(
     out_dir: Optional[str] = None,
     config: Optional[ExtractAudioConfig] = None,
 ) -> ExtractResult:
+    """
+    Extract audio to WAV and optionally chunk it, writing a manifest and cached outputs.
+
+    Example call:
+
+        extract_audio_task(
+            state,
+            "extract_audio",
+            input_url="https://www.youtube.com/watch?v=...",
+            config=ExtractAudioConfig(chunk_strategy="duration", chunk_duration_sec=150),
+        )
+
+    Args:
+        state (AgentState): Mutable agent state holding config and artifacts.
+        tool_name (str): Tool name label, commonly "extract_audio".
+        input_path (str, optional): Local media file path when not using a URL.
+        input_url (str, optional): Source URL; YouTube is supported and will be downloaded.
+        out_dir (str, optional): Override the output/cache directory (defaults under runtime/cache/extract).
+        config (ExtractAudioConfig, optional): Audio processing and chunking configuration.
+
+    Returns:
+        ExtractResult: Contains `wav_path`, `manifest_path`, and optional `chunks` metadata.
+
+    Raises:
+        ToolError: On invalid inputs, ffprobe/ffmpeg failures, or chunk export errors.
+    """
     tool = tool_name or "extract_audio"
 
     if not input_path and not input_url:

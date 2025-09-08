@@ -112,11 +112,22 @@ def _extract_and_normalize_youtube_url(text: str) -> Optional[str]:
 
 def fetch_task(state, fetch_name: str, user_text: str):
     """
-    Fetch video metadata for the first valid YouTube URL found in `user_text`.
-    - Mutates `state.video` and `state.artifacts["fetch"]`
-    - Raises ToolError on any failure
-    - Does NOT download audio/video
-    Returns the populated VideoMeta instance.
+    Fetch video metadata for the first valid YouTube URL found in user_text.
+
+    Example call:
+
+        fetch_task(state, "fetch_video", "Check https://youtu.be/abc123?t=90")
+
+    Args:
+        state (AgentState): Mutable agent state; will populate `state.video` and artifacts.
+        fetch_name (str): Tool name label; typically "fetch_video".
+        user_text (str): Text possibly containing a YouTube URL in any common format.
+
+    Returns:
+        VideoMeta: Populated metadata (video_id, title, duration_s, source_url).
+
+    Raises:
+        ToolError: If no valid YouTube URL is found, a playlist is detected, or yt-dlp fails.
     """
     tool_name = "fetch_video"
 
