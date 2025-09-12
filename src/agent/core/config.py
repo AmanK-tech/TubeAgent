@@ -43,44 +43,64 @@ class ExtractAudioConfig:
 
 
 def load_config(profile: str = "default") -> Config:
-    """Load configuration with optional YAML + env overrides."""
+    """Load agent Config with YAML and env overrides (DeepSeek only).
 
-    
-    defaults = {
+    Only the fields defined in agent.core.state.Config are accepted:
+      profile, provider, model, max_tokens, cost_limit_usd, step_limit, runtime_dir
+    """
+
+    # Base defaults aligned with state.Config
+    cfg_map: dict[str, object] = {
         "profile": profile,
-        "model": "gemini-2.5-flash",
+        "provider": "deepseek",
+        "model": "deepseek-chat",
         "max_tokens": 4000,
         "cost_limit_usd": 5.0,
-        "base_steps": 10,
-        "per_chunk_steps": 2,
+        "step_limit": 0,
         "runtime_dir": Path("runtime"),
-        "chunk_duration_s": 300,
-        "api_key": None,
     }
 
-    
+    # Optional YAML overrides; only accept known keys
     yaml_path = Path("configs") / f"{profile}.yaml"
     if yaml_path.exists():
-        with open(yaml_path, "r") as f:
-            yaml_config = yaml.safe_load(f) or {}
-            defaults.update(yaml_config)
+        try:
+            with open(yaml_path, "r", encoding="utf-8") as f:
+                yaml_config = yaml.safe_load(f) or {}
+            if isinstance(yaml_config, dict):
+                for k in list(cfg_map.keys()):
+                    if k in yaml_config and yaml_config[k] is not None:
+                        cfg_map[k] = yaml_config[k]
+        except Exception:
+            # Ignore YAML issues; stick to defaults
+            pass
 
-    
+    # Environment overrides
     env_overrides = {
+        "provider": os.getenv("AGENT_PROVIDER"),
         "model": os.getenv("AGENT_MODEL"),
         "max_tokens": os.getenv("AGENT_MAX_TOKENS"),
         "cost_limit_usd": os.getenv("AGENT_COST_LIMIT"),
-        "chunk_duration_s": os.getenv("AGENT_CHUNK_SEC"),
-        "api_key": os.getenv("GEMINI_API_KEY"),   # <-- pick up key
+        "step_limit": os.getenv("AGENT_STEP_LIMIT"),
     }
-
     for k, v in env_overrides.items():
-        if v is not None:
-            if k in ["max_tokens", "chunk_duration_s"]:
-                v = int(v)
-            elif k in ["cost_limit_usd"]:
-                v = float(v)
-            defaults[k] = v
+        if v is None:
+            continue
+        if k in {"max_tokens", "step_limit"}:
+            try:
+                cfg_map[k] = int(v)
+            except Exception:
+                continue
+        elif k in {"cost_limit_usd"}:
+            try:
+                cfg_map[k] = float(v)
+            except Exception:
+                continue
+        else:
+            cfg_map[k] = v
 
-    
-    return Config(**defaults)
+    # Coerce runtime_dir to Path if a string slipped in
+    rd = cfg_map.get("runtime_dir")
+    if isinstance(rd, str):
+        cfg_map["runtime_dir"] = Path(rd)
+
+    return Config(**cfg_map)  # type: ignore[arg-type]

@@ -38,8 +38,8 @@ def summarise_global(state, user_req):
         ToolError: If neither chunks nor a combined transcript are available.
     """
     model = state.config.model
-    key = getattr(state.config, "api_key", None) or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
-    llm = LLMClient(provider=state.config.provider, model=model, api_key=key)
+    key = getattr(state.config, "api_key", None) or os.getenv("DEEPSEEK_API_KEY")
+    llm = LLMClient(provider=getattr(state.config, "provider", "deepseek"), model=model, api_key=key)
 
     system_instruction = Path("src/agent/prompts/global_prompt.txt").read_text(encoding="utf-8")
 

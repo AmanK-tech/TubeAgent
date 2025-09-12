@@ -24,9 +24,9 @@ def summarise_chunk(state, chunk, user_req, *, llm: LLMClient | None = None):
     Raises:
         ToolError: If LLM provider configuration is invalid or the request fails.
     """
-    provider = state.config.provider
+    provider = getattr(state.config, "provider", "deepseek")
     model = state.config.model
-    key = getattr(state.config, "api_key", None) or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY") or os.getenv("DEEPSEEK_API_KEY")
+    key = getattr(state.config, "api_key", None) or os.getenv("DEEPSEEK_API_KEY")
     text = chunk.text
     # Reuse a provided LLM client or build one from state
     llm = llm or LLMClient(provider=provider, model=model, api_key=key)

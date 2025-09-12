@@ -14,84 +14,26 @@ from agent.errors import ToolError
 @dataclass
 class LLMClient:
     """
-    Minimal abstraction over LLM providers used in this repo.
+    Minimal abstraction for DeepSeek chat completions.
 
-    Supported providers:
-      - "google" (Gemini via google-genai)
-      - "deepseek" (OpenAI-compatible chat completions API)
+    Only DeepSeek is supported in this build.
     """
 
-    provider: str
+    provider: str  # kept for compatibility; ignored except for error messages
     model: str
     api_key: Optional[str] = None
-
-    # Internal singletons created lazily
-    _google_client: object | None = None
 
     def _get_key(self) -> Optional[str]:
         if self.api_key:
             return self.api_key
-        # Environment fallbacks by provider
-        if self.is_google:
-            return os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
-        if self.is_deepseek:
-            return os.getenv("DEEPSEEK_API_KEY")
-        return None
-
-    @property
-    def is_google(self) -> bool:
-        p = (self.provider or "").lower()
-        m = (self.model or "").lower()
-        return p.startswith("google") or p.startswith("gemini") or m.startswith("gemini")
-
-    @property
-    def is_deepseek(self) -> bool:
-        p = (self.provider or "").lower()
-        m = (self.model or "").lower()
-        return p.startswith("deepseek") or m.startswith("deepseek")
+        return os.getenv("DEEPSEEK_API_KEY")
 
     # --- Public API ---------------------------------------------------------
     def generate(self, *, system_instruction: Optional[str], user_text: str, max_output_tokens: int) -> str:
-        if self.is_google:
-            return self._generate_google(system_instruction=system_instruction, user_text=user_text, max_output_tokens=max_output_tokens)
-        if self.is_deepseek:
-            return self._generate_deepseek(system_instruction=system_instruction, user_text=user_text, max_output_tokens=max_output_tokens)
-        raise ToolError(f"Unsupported provider: {self.provider}", tool_name="llm")
+        # Always use DeepSeek; other providers are not supported
+        return self._generate_deepseek(system_instruction=system_instruction, user_text=user_text, max_output_tokens=max_output_tokens)
 
-    # --- Provider impls -----------------------------------------------------
-    def _generate_google(self, *, system_instruction: Optional[str], user_text: str, max_output_tokens: int) -> str:
-        try:
-            # Lazy import to avoid hard dependency when not needed
-            from google import genai  # type: ignore
-            from google.genai import types  # type: ignore
-        except Exception as e:  # pragma: no cover
-            raise ToolError("google-genai SDK not installed", tool_name="llm_google") from e
-
-        if self._google_client is None:
-            key = self._get_key()
-            self._google_client = genai.Client(api_key=key) if key else genai.Client()
-
-        client = self._google_client
-        assert client is not None
-
-        cfg = types.GenerateContentConfig(
-            system_instruction=system_instruction or "",
-            max_output_tokens=max_output_tokens,
-        )
-        contents = [
-            types.Content(
-                role="user",
-                parts=[types.Part(text=user_text)],
-            )
-        ]
-
-        try:
-            response = client.models.generate_content(model=self.model, config=cfg, contents=contents)
-        except Exception as e:  # pragma: no cover - network path
-            raise ToolError(f"Google GenAI request failed: {e}", tool_name="llm_google")
-
-        return getattr(response, "text", None) or ""
-
+    # --- Provider impl ------------------------------------------------------
     def _generate_deepseek(self, *, system_instruction: Optional[str], user_text: str, max_output_tokens: int) -> str:
         key = self._get_key()
         if not key:
