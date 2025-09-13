@@ -129,7 +129,7 @@ def fetch_task(state, fetch_name: str, user_text: str):
     Raises:
         ToolError: If no valid YouTube URL is found, a playlist is detected, or yt-dlp fails.
     """
-    tool_name = "fetch_video"
+    tool_name = fetch_name or "fetch_video"
 
     # 1) Extract + normalize URL
     normalized_url = _extract_and_normalize_youtube_url(user_text)
@@ -187,6 +187,6 @@ def fetch_task(state, fetch_name: str, user_text: str):
         "live_status": live_status,
         "duration_reported": duration,
     }
-    state.artifacts["fetch"] = fetch_notes
+    state.artifacts[tool_name] = fetch_notes
 
     return state.video

@@ -4,6 +4,11 @@ import dataclasses
 from pathlib import Path
 from typing import Any, Callable
 from agent.errors import ToolError
+from agent.tools.fetch import fetch_task
+from agent.tools.extract import extract_audio_task
+from agent.tools.transcribe import transcribe_task
+from agent.tools.summarise_global import summarise_global
+from agent.tools.emit_output import emit_output
 
 def to_jsonable(obj:Any) -> Any:
     if dataclasses.is_dataclass(obj):
@@ -45,7 +50,7 @@ def get_tools() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
-                "name": "fetch_video",
+                "name": "fetch_task",
                 "description": "Fetch YouTube video metadata from free-form user text containing a URL; populates AgentState.video.",
                 "parameters": {
                     "type": "object",
@@ -56,6 +61,7 @@ def get_tools() -> list[dict[str, Any]]:
                         },
                     },
                     "required": ["user_text"],
+                    "additionalProperties": False
                 },
             },
         },

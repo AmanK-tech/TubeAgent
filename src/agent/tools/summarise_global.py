@@ -1,5 +1,10 @@
 from pathlib import Path
 import os
+try:
+    # Prefer package-safe resource loading when available
+    from importlib.resources import files as _res_files  # Python 3.9+
+except Exception:  # pragma: no cover - fallback if not available
+    _res_files = None
 
 from agent.errors import ToolError
 from agent.tools.summarise_chunks import summarise_chunk
@@ -41,7 +46,22 @@ def summarise_global(state, user_req):
     key = getattr(state.config, "api_key", None) or os.getenv("DEEPSEEK_API_KEY")
     llm = LLMClient(provider=getattr(state.config, "provider", "deepseek"), model=model, api_key=key)
 
-    system_instruction = Path("src/agent/prompts/global_prompt.txt").read_text(encoding="utf-8")
+    # Resolve prompt from package resources with a robust fallback to filesystem
+    def _load_prompt_text(filename: str) -> str:
+        # Try importlib.resources via the 'agent' package
+        if _res_files is not None:
+            try:
+                return (_res_files("agent") / "prompts" / filename).read_text(encoding="utf-8")
+            except Exception:
+                pass
+        # Fallback to path relative to this file (src layout or editable installs)
+        try:
+            agent_dir = Path(__file__).resolve().parents[1]  # .../agent
+            return (agent_dir / "prompts" / filename).read_text(encoding="utf-8")
+        except Exception:
+            return ""
+
+    system_instruction = _load_prompt_text("global_prompt.txt")
 
     # Ensure we have something to work with
     chunks = list(getattr(state, "chunks", []) or [])

@@ -1,5 +1,10 @@
 from pathlib import Path
 import os
+try:
+    # Prefer package-safe resource loading when available
+    from importlib.resources import files as _res_files  # Python 3.9+
+except Exception:  # pragma: no cover - fallback if not available
+    _res_files = None
 
 from agent.llm.client import LLMClient
 
@@ -31,7 +36,22 @@ def summarise_chunk(state, chunk, user_req, *, llm: LLMClient | None = None):
     # Reuse a provided LLM client or build one from state
     llm = llm or LLMClient(provider=provider, model=model, api_key=key)
 
-    system_instruction = Path("src/agent/prompts/chunk_prompt.txt").read_text(encoding="utf-8")
+    # Resolve prompt from package resources with a robust fallback to filesystem
+    def _load_prompt_text(filename: str) -> str:
+        # Try importlib.resources via the 'agent' package
+        if _res_files is not None:
+            try:
+                return (_res_files("agent") / "prompts" / filename).read_text(encoding="utf-8")
+            except Exception:
+                pass
+        # Fallback to path relative to this file (src layout or editable installs)
+        try:
+            agent_dir = Path(__file__).resolve().parents[1]  # .../agent
+            return (agent_dir / "prompts" / filename).read_text(encoding="utf-8")
+        except Exception:
+            return ""
+
+    system_instruction = _load_prompt_text("chunk_prompt.txt")
 
     # Build a single user message with both the request and grounded transcript
     start_s = getattr(chunk, "start_s", None)
