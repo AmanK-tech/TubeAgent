@@ -103,3 +103,82 @@ class LLMClient:
 
         # Should not reach here
         raise ToolError("DeepSeek: retries exhausted", tool_name="llm_deepseek")
+
+    # --- Raw chat for function calling --------------------------------------
+    def chat_raw(
+        self,
+        *,
+        messages: list[dict],
+        tools: Optional[list[dict]] = None,
+        tool_choice: Optional[object] = None,
+        max_output_tokens: int = 1024,
+    ) -> dict:
+        """
+        Low-level chat call returning the parsed JSON response (supports tools).
+
+        - messages: list of {role, content, ...}
+        - tools: list of tool/function schemas as returned by get_tools()
+        - tool_choice: None, "auto", "required", or a provider-specific object
+        """
+        key = self._get_key()
+        if not key:
+            raise ToolError("Missing DEEPSEEK_API_KEY", tool_name="llm_deepseek")
+
+        url = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com") + "/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max(1, int(max_output_tokens or 1024)),
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = tools
+            if tool_choice is not None:
+                payload["tool_choice"] = tool_choice
+
+        data = json.dumps(payload).encode("utf-8")
+        req = request.Request(url, data=data, headers=headers, method="POST")
+
+        retries = int(os.getenv("DEEPSEEK_RETRIES", "2") or 2)
+        backoff = float(os.getenv("DEEPSEEK_BACKOFF", "1.5") or 1.5)
+        _default_timeout = 120.0 if ("reason" in (self.model or "").lower() or "r1" in (self.model or "").lower()) else 60.0
+        timeout = float(os.getenv("DEEPSEEK_TIMEOUT", str(_default_timeout)) or _default_timeout)
+
+        for attempt in range(retries + 1):
+            try:
+                with request.urlopen(req, timeout=timeout) as resp:
+                    raw = resp.read().decode("utf-8")
+                    obj = json.loads(raw)
+                    return obj
+            except error.HTTPError as e:  # pragma: no cover - network path
+                try:
+                    body = e.read().decode("utf-8")
+                except Exception:
+                    body = str(e)
+                if e.code in (429, 503) and attempt < retries:
+                    time.sleep(backoff * (2 ** attempt))
+                    continue
+                raise ToolError(f"DeepSeek HTTP {e.code}: {body}", tool_name="llm_deepseek")
+            except error.URLError as e:  # pragma: no cover - network path
+                if attempt < retries:
+                    time.sleep(backoff * (2 ** attempt))
+                    continue
+                raise ToolError(f"DeepSeek network error: {e}", tool_name="llm_deepseek")
+            except socket.timeout as e:  # pragma: no cover - network path
+                if attempt < retries:
+                    time.sleep(backoff * (2 ** attempt))
+                    continue
+                raise ToolError(f"DeepSeek timeout: {e}", tool_name="llm_deepseek")
+            except Exception as e:  # pragma: no cover - network path
+                if attempt < retries:
+                    time.sleep(backoff * (2 ** attempt))
+                    continue
+                raise ToolError(f"DeepSeek request failed: {e}", tool_name="llm_deepseek")
+
+        # Should not reach here
+        raise ToolError("DeepSeek: retries exhausted", tool_name="llm_deepseek")

@@ -4,11 +4,13 @@ import dataclasses
 from pathlib import Path
 from typing import Any, Callable
 from agent.errors import ToolError
+from agent.core.config import ExtractAudioConfig
 from agent.tools.fetch import fetch_task
 from agent.tools.extract import extract_audio_task
 from agent.tools.transcribe import transcribe_task
 from agent.tools.summarise_global import summarise_global
 from agent.tools.emit_output import emit_output
+from agent.llm.client import LLMClient
 
 def to_jsonable(obj:Any) -> Any:
     if dataclasses.is_dataclass(obj):
@@ -40,7 +42,7 @@ def get_tools() -> list[dict[str, Any]]:
     """Return tool/function specs for use with function-calling LLMs.
 
     Tools covered:
-      - fetch_video
+      - fetch_task
       - extract_audio
       - transcribe_asr
       - summarise_global
@@ -177,3 +179,70 @@ def get_tools() -> list[dict[str, Any]]:
     ]
 
     return tools
+
+
+def dispatch_tool_call(state, name: str, params: dict) -> dict:
+    """Route a tool name + params to the concrete implementation and wrap output.
+
+    Ensures artifacts are reported under the same tool name used by callers.
+    """
+    tool = (name or "").strip()
+
+    if tool == "fetch_task":
+        # Keep artifact namespace consistent with tool name
+        return run_tool_json(state, tool, lambda: fetch_task(state, tool, params["user_text"]))
+
+    if tool == "extract_audio":
+        cfg_in = params.get("config")
+        cfg = ExtractAudioConfig(**cfg_in) if isinstance(cfg_in, dict) else None
+        return run_tool_json(
+            state,
+            tool,
+            lambda: extract_audio_task(
+                state,
+                tool,
+                input_path=params.get("input_path"),
+                input_url=params.get("input_url"),
+                out_dir=params.get("out_dir"),
+                config=cfg,
+            ),
+        )
+
+    if tool == "transcribe_asr":
+        return run_tool_json(
+            state,
+            tool,
+            lambda: transcribe_task(
+                state,
+                tool,
+                language=params.get("language", "en-US"),
+                manifest_path=params.get("manifest_path"),
+                azure_key=params.get("azure_key"),
+                azure_region=params.get("azure_region"),
+                azure_endpoint=params.get("azure_endpoint"),
+                azure_concurrency=params.get("azure_concurrency"),
+            ),
+        )
+
+    if tool == "summarise_global":
+        return run_tool_json(state, tool, lambda: summarise_global(state, params["user_req"]))
+
+    if tool == "emit_output":
+        return run_tool_json(
+            state,
+            tool,
+            lambda: emit_output(
+                state,
+                params["text"],
+                side_data=params.get("side_data"),
+                formats=params.get("formats"),
+                targets=params.get("targets"),
+                filename=params.get("filename"),
+                out_dir=params.get("out_dir"),
+                preview_chars=params.get("preview_chars", 1200),
+                webhook_url=params.get("webhook_url"),
+                tool_name=tool,
+            ),
+        )
+
+    raise ToolError(f"Unknown tool: {name}", tool_name=name)
