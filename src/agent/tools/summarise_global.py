@@ -24,6 +24,59 @@ def _fmt_ts(seconds: float | int | None) -> str:
     return f"{m:02d}:{s:02d}"
 
 
+def _calc_total_minutes(chunks) -> float:
+    try:
+        max_end = max(int(float(getattr(ch, "end_s", 0) or 0)) for ch in (chunks or []))
+        return float(max_end) / 60.0
+    except Exception:
+        return 0.0
+
+
+def _sum_chars(chunks) -> int:
+    total = 0
+    try:
+        for ch in chunks or []:
+            total += len((getattr(ch, "text", None) or ""))
+    except Exception:
+        pass
+    return total
+
+
+def _load_prompt_text(filename: str) -> str:
+    # Try importlib.resources via the 'agent' package
+    if _res_files is not None:
+        try:
+            return (_res_files("agent") / "prompts" / filename).read_text(encoding="utf-8")
+        except Exception:
+            pass
+    # Fallback to path relative to this file (src layout or editable installs)
+    try:
+        agent_dir = Path(__file__).resolve().parents[1]  # .../agent
+        return (agent_dir / "prompts" / filename).read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def _direct_summary_from_chunks(state, llm: LLMClient, user_req: str, chunks) -> str:
+    system_instruction = _load_prompt_text("global_prompt.txt")
+    parts = []
+    for i, ch in enumerate(chunks, start=1):
+        text = (getattr(ch, "text", None) or "").strip()
+        s = getattr(ch, "start_s", None)
+        e = getattr(ch, "end_s", None)
+        if isinstance(s, (int, float)) and isinstance(e, (int, float)):
+            hdr = f"[{_fmt_ts(s)} - {_fmt_ts(e)}]"
+        else:
+            hdr = f"[Part {i}]"
+        parts.append(f"{hdr}\n{text}")
+    combined = "\n\n".join(parts)
+    content_text = (
+        f"User request:\n{user_req}\n\n"
+        f"Full transcript with timestamps:\n{combined}"
+    )
+    return llm.generate(system_instruction=system_instruction, user_text=content_text, max_output_tokens=state.config.max_tokens)
+
+
 def summarise_global(state, user_req):
     """
     Produce a final deliverable by synthesizing across transcript chunks (and cached summaries).
@@ -46,28 +99,11 @@ def summarise_global(state, user_req):
     key = getattr(state.config, "api_key", None) or os.getenv("DEEPSEEK_API_KEY")
     llm = LLMClient(provider=getattr(state.config, "provider", "deepseek"), model=model, api_key=key)
 
-    # Resolve prompt from package resources with a robust fallback to filesystem
-    def _load_prompt_text(filename: str) -> str:
-        # Try importlib.resources via the 'agent' package
-        if _res_files is not None:
-            try:
-                return (_res_files("agent") / "prompts" / filename).read_text(encoding="utf-8")
-            except Exception:
-                pass
-        # Fallback to path relative to this file (src layout or editable installs)
-        try:
-            agent_dir = Path(__file__).resolve().parents[1]  # .../agent
-            return (agent_dir / "prompts" / filename).read_text(encoding="utf-8")
-        except Exception:
-            return ""
-
-    system_instruction = _load_prompt_text("global_prompt.txt")
-
     # Ensure we have something to work with
     chunks = list(getattr(state, "chunks", []) or [])
+    transcript = getattr(state, "transcript", None)
     if not chunks:
         # Fall back to a single pseudo-chunk from the combined transcript
-        transcript = getattr(state, "transcript", None)
         if not transcript:
             raise ToolError("No chunks or transcript found for global summarisation.", tool_name="summarise_global")
         # Construct a minimal pseudo-chunk-like object
@@ -78,6 +114,48 @@ def summarise_global(state, user_req):
                 self.text = text
                 self.summary = None
         chunks = [_PseudoChunk(transcript)]
+
+    # Decide direct vs chunk-by-chunk strategy with safeguards
+    # Policy: if video <= 20 minutes, do a single direct global call; else use N+1 (per-chunk + global)
+    try:
+        minutes_limit_env = os.getenv("GLOBAL_DIRECT_MINUTES_LIMIT")
+        minutes_limit = float(minutes_limit_env) if minutes_limit_env else 20.0
+    except Exception:
+        minutes_limit = 20.0
+
+    total_minutes = _calc_total_minutes(chunks)
+    total_chars = _sum_chars(chunks)
+
+    if total_minutes <= minutes_limit:
+        # Attempt single-pass global summary; on context/token errors, fallback
+        try:
+            result_text = _direct_summary_from_chunks(state, llm, user_req, chunks)
+            try:
+                state.artifacts.setdefault("summarise_global", {})
+                state.artifacts["summarise_global"].update(
+                    {
+                        "approach": "direct_summary",
+                        "chunks_used": len(chunks),
+                        "generated_chunk_summaries": 0,
+                        "loaded_cached_summaries": 0,
+                        "result_chars": len(result_text or ""),
+                        "duration_minutes": total_minutes,
+                        "total_chars": total_chars,
+                    }
+                )
+            except Exception:
+                pass
+            return result_text
+        except ToolError as e:
+            msg = str(e).lower()
+            if any(k in msg for k in ["context", "token", "length", "too large"]):
+                # safe fallback
+                pass
+            else:
+                raise
+        except Exception:
+            # Any unexpected failure in direct path — continue with chunk-by-chunk
+            pass
 
     # Attempt to map chunks back to transcribe artifacts to discover indices/paths
     art = getattr(state, "artifacts", {}) or {}
@@ -102,7 +180,8 @@ def summarise_global(state, user_req):
     used_generated = 0
     used_loaded = 0
     # Optional: skip calling per-chunk summariser and rely on raw excerpts only
-    skip_chunk_calls = str(os.getenv("SUMMARISE_GLOBAL_SKIP_CHUNK_CALLS", "0")).strip() in {"1", "true", "yes"}
+    # For long videos (> minutes_limit), ensure per-chunk summaries are generated (N calls) before the global pass (+1)
+    skip_chunk_calls = False
     # Excerpt length (chars) for grounding; smaller -> less prompt cost
     try:
         excerpt_len = int(os.getenv("GLOBAL_EXCERPT_CHARS", "400") or 400)
@@ -183,6 +262,7 @@ def summarise_global(state, user_req):
 
     content_text = "\n".join(header + parts)
 
+    system_instruction = _load_prompt_text("global_prompt.txt")
     result_text = llm.generate(system_instruction=system_instruction, user_text=content_text, max_output_tokens=state.config.max_tokens)
 
     # Record minimal artifacts for observability
@@ -190,10 +270,13 @@ def summarise_global(state, user_req):
         state.artifacts.setdefault("summarise_global", {})
         state.artifacts["summarise_global"].update(
             {
+                "approach": "chunk_by_chunk",
                 "chunks_used": len(local_outputs),
                 "generated_chunk_summaries": used_generated,
                 "loaded_cached_summaries": used_loaded,
                 "result_chars": len(result_text or ""),
+                "duration_minutes": total_minutes,
+                "total_chars": _sum_chars(chunks),
             }
         )
     except Exception:
