@@ -148,6 +148,7 @@ def get_tools() -> list[dict[str, Any]]:
                     "type": "object",
                     "properties": {
                         "user_req": {"type": "string", "description": "Instruction describing the desired final output."},
+                        "intent": {"type": "string", "description": "Optional planner-provided intent hint (e.g., 'summary','question','search','fact_extraction')."},
                     },
                     "required": ["user_req"],
                     "additionalProperties": False,
@@ -225,7 +226,7 @@ def dispatch_tool_call(state, name: str, params: dict) -> dict:
         )
 
     if tool == "summarise_global":
-        return run_tool_json(state, tool, lambda: summarise_global(state, params["user_req"]))
+        return run_tool_json(state, tool, lambda: summarise_global(state, params["user_req"], intent=params.get("intent")))
 
     if tool == "emit_output":
         return run_tool_json(

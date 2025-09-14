@@ -77,7 +77,7 @@ def _direct_summary_from_chunks(state, llm: LLMClient, user_req: str, chunks) ->
     return llm.generate(system_instruction=system_instruction, user_text=content_text, max_output_tokens=state.config.max_tokens)
 
 
-def summarise_global(state, user_req):
+def summarise_global(state, user_req, intent: str | None = None):
     """
     Produce a final deliverable by synthesizing across transcript chunks (and cached summaries).
 
@@ -129,7 +129,12 @@ def summarise_global(state, user_req):
     if total_minutes <= minutes_limit:
         # Attempt single-pass global summary; on context/token errors, fallback
         try:
-            result_text = _direct_summary_from_chunks(state, llm, user_req, chunks)
+            # If intent provided, include as guidance in the direct prompt
+            if intent and isinstance(intent, str) and intent.strip():
+                user_req_with_intent = f"{user_req}\n\nIntent: {intent.strip()}"
+            else:
+                user_req_with_intent = user_req
+            result_text = _direct_summary_from_chunks(state, llm, user_req_with_intent, chunks)
             try:
                 state.artifacts.setdefault("summarise_global", {})
                 state.artifacts["summarise_global"].update(
@@ -204,7 +209,8 @@ def summarise_global(state, user_req):
                     pass
         # Generate if still missing
         if not summary_text and not skip_chunk_calls:
-            summary_text = summarise_chunk(state, ch, user_req, llm=llm)
+            req_for_chunk = f"{user_req} (intent: {intent})" if intent else user_req
+            summary_text = summarise_chunk(state, ch, req_for_chunk, llm=llm)
             # Try to persist back to state for downstream visibility
             try:
                 ch.summary = summary_text
@@ -239,6 +245,7 @@ def summarise_global(state, user_req):
     header = [
         "User request:",
         str(user_req or ""),
+        ("Intent: " + intent.strip()) if isinstance(intent, str) and intent.strip() else "",
         "",
         "Below are per-chunk outputs and brief raw excerpts.",
         "Use only information from these chunks; do not invent facts.",
@@ -277,6 +284,7 @@ def summarise_global(state, user_req):
                 "result_chars": len(result_text or ""),
                 "duration_minutes": total_minutes,
                 "total_chars": _sum_chars(chunks),
+                "intent": intent,
             }
         )
     except Exception:
