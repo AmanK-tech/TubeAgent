@@ -49,6 +49,7 @@ OUTPUT REQUIREMENTS
 - Use clear, structured formatting (headings, bullets, etc.) if appropriate.
 - If transcript lacks information, state precisely what’s missing.
 - Do not fabricate or import outside facts.
+- Do not include meta disclaimers such as "Based on the transcript" or similar; write as a standalone response.
 
 STYLE & QUALITY
 - Faithful, concise, well-organized.
@@ -56,6 +57,7 @@ STYLE & QUALITY
 - Use quotes strategically for precision.
 - Prefer active voice and plain language unless tone is specified.
 - Keep headings informative and aligned to transcript content.
+- Avoid boilerplate phrases like "Based on the transcript" — start directly with the content.
 
 ERROR & GAPS POLICY
 - If chunks are missing, duplicated, or out of order, note it briefly and continue.

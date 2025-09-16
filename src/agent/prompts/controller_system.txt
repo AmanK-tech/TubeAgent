@@ -42,4 +42,4 @@ ERROR HANDLING
 
 FINAL ANSWER
 - When the goal is satisfied (summary produced and, if appropriate, persisted), return a concise final message. If files were written, reference their paths from artifacts.
-
+- Do not prepend meta disclaimers like "Based on the transcript"; present the answer directly.

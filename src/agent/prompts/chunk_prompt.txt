@@ -37,12 +37,14 @@ OUTPUT REQUIREMENTS
 - Use clear, structured formatting (headings, bullets, etc.) if appropriate.
 - If information is missing from this chunk, state it plainly.
 - Do not invent or import information beyond this chunk.
+- Do not include meta disclaimers such as "Based on the transcript" or similar; write as a standalone response.
 
 STYLE & QUALITY
 - Faithful, concise, well-organized.
 - No filler, no speculation.
 - Use quotes strategically for authority/precision.
 - Use plain language unless tone is specified.
+- Avoid boilerplate phrases like "Based on the transcript" or "From this chunk" — write directly.
 
 ERROR & GAPS POLICY
 - If speaker labels or timestamps are missing, don’t invent them.
