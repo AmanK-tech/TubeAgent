@@ -8,6 +8,7 @@ from typing import Optional
 from agent.errors import ToolError
 from agent.llm.client import LLMClient
 from agent.core.toolkit import get_tools, dispatch_tool_call
+from agent.core.planner import Planner
 
 # ---- small, local safeguards ----
 MAX_MSG_WINDOW = 24           # cap chat history to avoid context bloat
@@ -128,6 +129,85 @@ def run_session(
 
         # No tool calls => final answer
         return msg.get("content") or ""
+
+    raise ToolError("Step limit reached without final answer", tool_name="controller")
+
+
+def run_hybrid_session(
+    state,
+    user_text: str,
+    *,
+    system_instruction: Optional[str] = None,
+    tool_choice: Optional[object] = None,
+    max_output_tokens: Optional[int] = None,
+    max_steps: Optional[int] = None,
+) -> str:
+    """Hybrid orchestration: planner routing with fallback to function-calling.
+
+    - Uses Planner.route_and_plan to decide between planner-driven step(s) and
+      delegation to the function-calling controller (run_session).
+    - Avoids mode churn by honoring planner's internal mode lock.
+    - Keeps artifacts consistent by executing actual tools via dispatch_tool_call.
+    """
+    planner = Planner(model=getattr(state.config, "model", "deepseek-chat"))
+
+    # Small loop-guard for planner-driven steps
+    from collections import deque
+    recent_tools: deque[tuple[str, str]] = deque(maxlen=4)
+
+    steps = int(max_steps or getattr(state.config, "step_limit", 8) or 8)
+    for _ in range(max(1, steps)):
+        route = planner.route_and_plan(state, user_text)
+        act = route.get("action")
+        if act == "delegate_tools":
+            # Delegate to function-calling controller for complex/creative analyses
+            return run_session(
+                state,
+                user_text,
+                system_instruction=system_instruction,
+                tool_choice=tool_choice,
+                max_output_tokens=max_output_tokens,
+            )
+        if act == "final":
+            return route.get("content") or ""
+        if act == "tool_call":
+            name = route.get("tool")
+            params = route.get("arguments") or {}
+            # Repeat-tool loop guard
+            import json as _json
+            sig = (name or "", _json.dumps(params, sort_keys=True))
+            recent_tools.append(sig)
+            if len(recent_tools) == recent_tools.maxlen and len(set(recent_tools)) == 1:
+                raise ToolError(f"Repeat tool loop detected: {name}", tool_name="controller")
+
+            # Execute the tool via dispatcher
+            try:
+                res = dispatch_tool_call(state, name, params)
+            except Exception as e:
+                # Normalize by delegating to tools path on planner execution error
+                return run_session(
+                    state,
+                    user_text,
+                    system_instruction=system_instruction,
+                    tool_choice=tool_choice,
+                    max_output_tokens=max_output_tokens,
+                )
+
+            # If summarise_global returned text, we can finish here
+            if name == "summarise_global" and isinstance(res, dict) and res.get("ok") and isinstance(res.get("result"), str):
+                return res.get("result") or ""
+
+            # Otherwise continue the loop to plan next step
+            continue
+
+        # Unexpected action → delegate to tools as a safe default
+        return run_session(
+            state,
+            user_text,
+            system_instruction=system_instruction,
+            tool_choice=tool_choice,
+            max_output_tokens=max_output_tokens,
+        )
 
     raise ToolError("Step limit reached without final answer", tool_name="controller")
 

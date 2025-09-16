@@ -225,6 +225,26 @@ def _validate_action(state, plan: Dict[str, Any]) -> Tuple[bool, Optional[Dict[s
         return True, None, f"validate_error:{e}"
 
 
+def _state_signature(state) -> Dict[str, Any]:
+    """Small signature of session progress to control mode churn.
+
+    When this signature changes (e.g., transcript becomes available), we may lift
+    the mode lock and re-evaluate routing.
+    """
+    sig: Dict[str, Any] = {
+        "has_video": bool(getattr(state, "video", None)),
+        "has_transcript": bool(getattr(state, "transcript", None)),
+        "chunk_count": int(len(getattr(state, "chunks", []) or [])),
+    }
+    try:
+        ta = (getattr(state, "artifacts", {}) or {}).get("transcribe_asr", {})
+        if isinstance(ta, dict) and ta.get("chunks"):
+            sig["transcribed_chunks"] = int(len(ta.get("chunks") or []))
+    except Exception:
+        pass
+    return sig
+
+
 @dataclass
 class Planner:
     """LLM-driven planner that decides the next action/tool or a final response.
@@ -308,3 +328,73 @@ class Planner:
             obj = obj2
 
         return obj
+
+    # ---------------------- Hybrid Routing Helpers ---------------------------
+
+    def _choose_mode(self, state, user_text: str, *, history: Optional[list[dict]] = None) -> Dict[str, Any]:
+        """Decide whether to use planner or delegate to tool-calling.
+
+        Respects a per-session mode lock in artifacts["planner"]["mode_lock"].
+        Lifts the lock when the state signature changes materially (e.g., transcript appears).
+        """
+        arts = getattr(state, "artifacts", {}) or {}
+        arts.setdefault("planner", {})
+        lock = arts["planner"].get("mode_lock") if isinstance(arts["planner"], dict) else None
+        sig = _state_signature(state)
+
+        # If locked and signature unchanged, reuse the mode to avoid churn
+        if isinstance(lock, dict) and lock.get("state_signature") == sig:
+            return {"mode": lock.get("mode"), "reason": lock.get("reason"), "locked": True}
+
+        # No lock or signature changed: compute fresh routing
+        intent = _classify_intent_heuristic(user_text, history=history)
+        has_transcript = bool(getattr(state, "transcript", None) or getattr(state, "chunks", None))
+        has_video = bool(getattr(state, "video", None))
+
+        # Default routing: prefer planner unless explicitly complex analysis with transcript
+        if not has_video:
+            mode = "planner"; reason = "need_initial_pipeline"
+        elif has_transcript and intent in {"question", "search", "fact_extraction"}:
+            mode = "planner"; reason = "fast_path_available"
+        elif intent == "summary" and not has_transcript:
+            mode = "planner"; reason = "domain_workflow"
+        elif has_transcript and intent in {"comparison", "analysis"}:
+            mode = "tools"; reason = "complex_analysis"
+        else:
+            mode = "planner"; reason = "domain_default"
+
+        # Set/refresh lock with current signature
+        try:
+            arts["planner"]["mode_lock"] = {"mode": mode, "reason": reason, "state_signature": sig}
+        except Exception:
+            pass
+
+        return {"mode": mode, "reason": reason, "locked": False}
+
+    def route_and_plan(self, state, user_text: str, *, history: Optional[list[dict]] = None) -> Dict[str, Any]:
+        """Hybrid entry point: choose orchestration mode, then return a plan or delegation.
+
+        Returns one of:
+          - {"action":"tool_call", ...}  (planner decided a concrete next step)
+          - {"action":"final", "content":"..."}
+          - {"action":"delegate_tools", "reason":"..."}   (call function-calling controller)
+
+        This does not execute tools; callers should either run dispatch_tool_call() for
+        tool_call actions, or switch to the function-calling controller for delegation.
+        """
+        routing = self._choose_mode(state, user_text, history=history)
+        mode = routing.get("mode")
+        reason = routing.get("reason")
+        _log(state, "routing", {"mode": mode, "reason": reason, "locked": routing.get("locked")})
+
+        if mode == "planner":
+            # Use existing planning logic (unchanged pipeline behavior)
+            try:
+                return self.plan_next(state, user_text, history=history)
+            except Exception as e:
+                # Normalize error and delegate to tools as fallback
+                _log(state, "routing_fallback", {"from": "planner", "error": str(e)})
+                return {"action": "delegate_tools", "reason": "planner_error"}
+        else:
+            # Delegate to function-calling controller
+            return {"action": "delegate_tools", "reason": reason}
