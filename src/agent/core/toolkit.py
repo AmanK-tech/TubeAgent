@@ -10,6 +10,7 @@ from agent.tools.extract import extract_audio_task
 from agent.tools.transcribe import transcribe_task
 from agent.tools.summarise_global import summarise_global
 from agent.tools.emit_output import emit_output
+from agent.tools.answer_from_metadata import answer_from_metadata
 from agent.llm.client import LLMClient
 
 def to_jsonable(obj:Any) -> Any:
@@ -149,8 +150,23 @@ def get_tools() -> list[dict[str, Any]]:
                     "properties": {
                         "user_req": {"type": "string", "description": "Instruction describing the desired final output."},
                         "intent": {"type": "string", "description": "Optional planner-provided intent hint (e.g., 'summary','question','search','fact_extraction')."},
+                        "include_metadata": {"type": "boolean", "description": "If true, include video title/channel/URL as grounding alongside transcript."},
                     },
                     "required": ["user_req"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "answer_from_metadata",
+                "description": "Answer simple identity/metadata questions directly from already-fetched video metadata (no LLM).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string", "description": "Original user question (optional)."}
+                    },
                     "additionalProperties": False,
                 },
             },
@@ -226,7 +242,7 @@ def dispatch_tool_call(state, name: str, params: dict) -> dict:
         )
 
     if tool == "summarise_global":
-        return run_tool_json(state, tool, lambda: summarise_global(state, params["user_req"], intent=params.get("intent")))
+        return run_tool_json(state, tool, lambda: summarise_global(state, params["user_req"], intent=params.get("intent"), include_metadata=bool(params.get("include_metadata", False))))
 
     if tool == "emit_output":
         return run_tool_json(
@@ -245,5 +261,8 @@ def dispatch_tool_call(state, name: str, params: dict) -> dict:
                 tool_name=tool,
             ),
         )
+
+    if tool == "answer_from_metadata":
+        return run_tool_json(state, tool, lambda: answer_from_metadata(state, question=params.get("question")))
 
     raise ToolError(f"Unknown tool: {name}", tool_name=name)

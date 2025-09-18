@@ -57,7 +57,7 @@ def _load_prompt_text(filename: str) -> str:
         return ""
 
 
-def _direct_summary_from_chunks(state, llm: LLMClient, user_req: str, chunks) -> str:
+def _direct_summary_from_chunks(state, llm: LLMClient, user_req: str, chunks, *, meta_text: str | None = None) -> str:
     system_instruction = _load_prompt_text("global_prompt.txt")
     parts = []
     for i, ch in enumerate(chunks, start=1):
@@ -70,14 +70,16 @@ def _direct_summary_from_chunks(state, llm: LLMClient, user_req: str, chunks) ->
             hdr = f"[Part {i}]"
         parts.append(f"{hdr}\n{text}")
     combined = "\n\n".join(parts)
+    meta_block = ("Video metadata:\n" + meta_text.strip() + "\n\n") if meta_text and meta_text.strip() else ""
     content_text = (
-        f"User request:\n{user_req}\n\n"
+        f"User request:\n{user_req}\n\n" +
+        meta_block +
         f"Full transcript with timestamps:\n{combined}"
     )
     return llm.generate(system_instruction=system_instruction, user_text=content_text, max_output_tokens=state.config.max_tokens)
 
 
-def summarise_global(state, user_req, intent: str | None = None):
+def summarise_global(state, user_req, intent: str | None = None, include_metadata: bool | None = False):
     """
     Produce a final deliverable by synthesizing across transcript chunks (and cached summaries).
 
@@ -126,6 +128,23 @@ def summarise_global(state, user_req, intent: str | None = None):
     total_minutes = _calc_total_minutes(chunks)
     total_chars = _sum_chars(chunks)
 
+    # Optional metadata grounding text
+    meta_lines: list[str] = []
+    if include_metadata:
+        try:
+            vid = getattr(state, "video", None)
+            art = (getattr(state, "artifacts", {}) or {}).get("fetch_task", {})
+            chan = art.get("channel") or art.get("uploader")
+            if getattr(vid, "title", None):
+                meta_lines.append(f"Title: {vid.title}")
+            if chan:
+                meta_lines.append(f"Channel: {chan}")
+            if getattr(vid, "source_url", None):
+                meta_lines.append(f"URL: {vid.source_url}")
+        except Exception:
+            pass
+    meta_text = "\n".join(meta_lines) if meta_lines else None
+
     if total_minutes <= minutes_limit:
         # Attempt single-pass global summary; on context/token errors, fallback
         try:
@@ -134,7 +153,7 @@ def summarise_global(state, user_req, intent: str | None = None):
                 user_req_with_intent = f"{user_req}\n\nIntent: {intent.strip()}"
             else:
                 user_req_with_intent = user_req
-            result_text = _direct_summary_from_chunks(state, llm, user_req_with_intent, chunks)
+            result_text = _direct_summary_from_chunks(state, llm, user_req_with_intent, chunks, meta_text=meta_text)
             try:
                 state.artifacts.setdefault("summarise_global", {})
                 state.artifacts["summarise_global"].update(
@@ -246,8 +265,9 @@ def summarise_global(state, user_req, intent: str | None = None):
         "User request:",
         str(user_req or ""),
         ("Intent: " + intent.strip()) if isinstance(intent, str) and intent.strip() else "",
+        ("Video metadata:\n" + meta_text) if meta_text else "",
         "",
-        "Below are per-chunk outputs and brief raw excerpts.",
+        ("Use the transcript and provided metadata; do not invent beyond these.\n" if meta_text else "") + "Below are per-chunk outputs and brief raw excerpts.",
         "Use only information from these chunks; do not invent facts.",
         "",
         "CHUNKS:",

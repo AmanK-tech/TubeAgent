@@ -180,6 +180,53 @@ def _classify_intent_heuristic(user_text: str, *, history: Optional[List[dict]] 
     return "summary"
 
 
+def _is_identity_query(user_text: str) -> bool:
+    t = (user_text or "").strip().lower()
+    if not t:
+        return False
+    phrases = [
+        "who is the youtuber",
+        "who is the channel",
+        "who is the creator",
+        "channel name",
+        "youtuber name",
+        "who uploaded",
+        "what's the channel",
+        "whats the channel",
+        "what is the channel",
+        "what is the youtuber",
+    ]
+    return any(p in t for p in phrases)
+
+
+def _has_metadata(state) -> bool:
+    try:
+        vid = getattr(state, "video", None)
+        art = (getattr(state, "artifacts", {}) or {}).get("fetch_task", {}) or (getattr(state, "artifacts", {}) or {}).get("fetch", {})
+        if vid and (getattr(vid, "title", None) or getattr(vid, "source_url", None)):
+            return True
+        if isinstance(art, dict) and (art.get("channel") or art.get("uploader") or art.get("normalized_url")):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _wants_metadata(user_text: str, intent: str) -> bool:
+    """Heuristic: include metadata in global summary when it's likely relevant.
+
+    - Summary queries that reference channel/title/host/speaker/etc.
+    - Identity-like questions (who is the youtuber/channel/creator).
+    """
+    t = (user_text or "").lower()
+    if _is_identity_query(t):
+        return True
+    if intent == "summary":
+        keys = ["channel", "youtuber", "creator", "title", "host", "speaker", "presenter"]
+        return any(k in t for k in keys)
+    return False
+
+
 def _log(state, kind: str, data: Dict[str, Any]) -> None:
     try:
         arts = getattr(state, "artifacts", None)
@@ -268,10 +315,21 @@ class Planner:
         _record_query(state, user_text, intent)
         _log(state, "intent", {"intent": intent, "user_text": user_text})
 
+        # Identity fast-path: answer "who is the youtuber/channel" directly from metadata if available
+        if intent == "question" and _is_identity_query(user_text):
+            art = getattr(state, "artifacts", {}) or {}
+            fetch_art = art.get("fetch_task") or art.get("fetch") or {}
+            has_meta = bool(fetch_art) or bool(getattr(state, "video", None))
+            if has_meta:
+                return {"action": "tool_call", "tool": "answer_from_metadata", "arguments": {"question": user_text}}
+
         # Early fast-paths: if transcript exists and it is a direct follow-up/search/fact request, go straight to global synthesis
         has_transcript = bool(getattr(state, "transcript", None) or getattr(state, "chunks", None))
         if has_transcript and intent in {"question", "search", "time_based", "fact_extraction", "comparison", "analysis"}:
-            obj = {"action": "tool_call", "tool": "summarise_global", "arguments": {"user_req": user_text, "intent": intent}}
+            args = {"user_req": user_text, "intent": intent}
+            if _has_metadata(state) and _wants_metadata(user_text, intent):
+                args["include_metadata"] = True
+            obj = {"action": "tool_call", "tool": "summarise_global", "arguments": args}
         else:
             if not self.use_llm:
                 obj = _rule_based_next(state, user_text)
@@ -310,6 +368,10 @@ class Planner:
             # carry intent hint forward for downstream tools if helpful
             if intent and obj["tool"] == "summarise_global" and "intent" not in args:
                 args["intent"] = intent
+            # attach include_metadata when warranted and metadata exists
+            if obj["tool"] == "summarise_global" and "include_metadata" not in args:
+                if _has_metadata(state) and _wants_metadata(user_text, intent):
+                    args["include_metadata"] = True
             obj["arguments"] = args
             ok, corrected, reason = _validate_action(state, obj)
             if not ok and corrected:
