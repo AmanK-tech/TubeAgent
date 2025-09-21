@@ -101,7 +101,7 @@ def extract_audio_task(
     for d in (cache_dir, tmp_dir, downloads_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    # Optional: download YouTube URL to local file first
+    # Optional: download YouTube URL to local file first (video-first)
     download_meta: Dict[str, Any] = {}
     original_url: Optional[str] = None
     if input_url and is_youtube_url(input_url):
@@ -274,6 +274,7 @@ def extract_audio_task(
         for idx, (rel_s, rel_e) in enumerate(boundaries):
             abs_s = cfg.start_offset_sec + rel_s
             abs_e = cfg.start_offset_sec + rel_e
+            # Export audio chunk (wav)
             out_path = base_dir / f"chunk_{idx:04d}_{base}.wav"
             cmd = [
                 ffmpeg_bin_local,
@@ -301,7 +302,48 @@ def extract_audio_task(
             sha = _sha256_file(out_path)
             ch = ChunkInfo(idx=idx, start_sec=abs_s, end_sec=abs_e, duration=max(0.0, abs_e - abs_s), path=str(out_path), sha256=sha)
             chunks.append(ch)
-            chunk_meta.append(asdict(ch))
+            ch_dict = asdict(ch)
+
+            # Export corresponding video chunk (mp4) via stream copy if possible
+            video_chunk = base_dir / f"chunk_{idx:04d}_{base}.mp4"
+            dur = max(0.01, rel_e - rel_s)
+            # First try stream copy for speed
+            cmd_vid_copy = [
+                ffmpeg_bin_local,
+                "-hide_banner",
+                "-ss", f"{rel_s:.3f}",
+                "-i", str(source),
+                "-t", f"{dur:.3f}",
+                "-c", "copy",
+                "-movflags", "+faststart",
+                "-avoid_negative_ts", "make_zero",
+                "-y", str(video_chunk),
+            ]
+            code_v, out_v, err_v = _run(cmd_vid_copy, timeout=int(max(60, dur * 6)))
+            if code_v != 0 or not video_chunk.exists():
+                # Fallback to re-encode for this chunk only
+                cmd_vid_encode = [
+                    ffmpeg_bin_local,
+                    "-hide_banner",
+                    "-ss", f"{rel_s:.3f}",
+                    "-i", str(source),
+                    "-t", f"{dur:.3f}",
+                    "-c:v", "libx264",
+                    "-preset", "veryfast",
+                    "-crf", "23",
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    "-y", str(video_chunk),
+                ]
+                code_v2, out_v2, err_v2 = _run(cmd_vid_encode, timeout=int(max(120, dur * 10)))
+                if code_v2 != 0:
+                    # Not fatal for extraction; we can proceed with audio-only chunk if video export fails
+                    pass
+            if video_chunk.exists():
+                ch_dict["video_path"] = str(video_chunk)
+
+            chunk_meta.append(ch_dict)
 
     # Build warnings
     warnings: List[str] = []
@@ -326,9 +368,15 @@ def extract_audio_task(
         wall_time_sec=wall_time,
         log_path=log_path,
         warnings=warnings,
+        video_path=Path(source),
     )
 
     state.artifacts.setdefault(tool, {})
-    state.artifacts[tool].update({"manifest_path": str(manifest_path), "wav_path": str(wav_out), "chunks": chunk_meta})
+    state.artifacts[tool].update({
+        "manifest_path": str(manifest_path),
+        "wav_path": str(wav_out),
+        "video_path": str(source),
+        "chunks": chunk_meta,
+    })
 
     return ExtractResult(type="chunks" if chunks else "single", wav_path=str(wav_out), chunks=chunks, manifest_path=str(manifest_path))

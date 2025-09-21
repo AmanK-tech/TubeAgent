@@ -32,7 +32,8 @@ class ExtractAudioConfig:
 
     # Chunking (tuned for faster turnaround)
     chunk_strategy: str = "duration"  # none | duration | vad
-    chunk_duration_sec: int = 150     # ~2.5 minutes per chunk by default
+    # Default to 30-minute chunks for video-first processing
+    chunk_duration_sec: int = 1800    # 30 minutes per chunk by default
     chunk_overlap_sec: float = 1.0    # small overlap to avoid cuts
     chunk_max_sec: int = 180          # VAD upper bound to prevent long runs
 

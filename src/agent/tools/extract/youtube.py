@@ -25,8 +25,11 @@ def is_youtube_url(url: str) -> bool:
 
 
 def download_youtube_audio(url: str, out_dir: Path) -> Tuple[Path, Dict[str, Any]]:
-    """Download bestaudio for a YouTube URL using yt-dlp into out_dir.
+    """Download best available YouTube video with audio (mp4 preferred) using yt-dlp.
     Returns (downloaded_path, meta). Raises ToolError if yt_dlp missing or download fails.
+
+    Note: Despite the name, this function now downloads video-first to support
+    Gemini transcription over video. It prefers MP4 output via yt-dlp merging.
     """
     try:
         import yt_dlp  # type: ignore
@@ -39,7 +42,9 @@ def download_youtube_audio(url: str, out_dir: Path) -> Tuple[Path, Dict[str, Any
     out_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(out_dir / "%(id)s.%(ext)s")
     ydl_opts = {
-        "format": "bestaudio/best",
+        # Prefer mp4 video+audio; fall back gracefully
+        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "merge_output_format": "mp4",
         "outtmpl": outtmpl,
         "noplaylist": True,
         "quiet": True,
@@ -74,4 +79,3 @@ def download_youtube_audio(url: str, out_dir: Path) -> Tuple[Path, Dict[str, Any
         "filepath": str(dl_path),
     }
     return dl_path, meta
-

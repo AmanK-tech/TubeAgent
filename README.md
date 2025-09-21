@@ -1,2 +1,2 @@
 # TubeAgent
-Agentic Youtube video summariser
+Agentic YouTube video summariser

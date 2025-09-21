@@ -28,6 +28,7 @@ def write_manifest(
     wall_time_sec: float,
     log_path: Path,
     warnings: List[str],
+    video_path: Optional[Path] = None,
 ) -> None:
     manifest: Dict[str, Any] = {
         "version": 1,
@@ -76,6 +77,11 @@ def write_manifest(
         },
     }
 
+    if video_path is not None:
+        try:
+            manifest["result"]["video_path"] = str(video_path)
+        except Exception:
+            pass
+
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
-

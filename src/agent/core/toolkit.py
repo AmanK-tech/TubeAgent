@@ -72,7 +72,7 @@ def get_tools() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "extract_audio",
-                "description": "Extract audio to WAV and optionally chunk it; writes a manifest and caches outputs for downstream ASR/summarisation.",
+                "description": "Download video (YouTube supported), extract normalized WAV, and create aligned MP4+WAV chunks; writes a manifest and caches outputs.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -82,7 +82,7 @@ def get_tools() -> list[dict[str, Any]]:
                         },
                         "input_url": {
                             "type": "string",
-                            "description": "Remote source URL (YouTube supported). If provided and YouTube, downloads audio first.",
+                            "description": "Remote source URL (YouTube supported). Downloads full video (mp4 preferred) for video-first processing.",
                         },
                         "out_dir": {
                             "type": "string",
@@ -90,7 +90,7 @@ def get_tools() -> list[dict[str, Any]]:
                         },
                         "config": {
                             "type": "object",
-                            "description": "Audio processing and chunking configuration.",
+                            "description": "Processing and chunking configuration (video-first; defaults to 30-minute duration chunks with small overlap).",
                             "properties": {
                                 "sample_rate": {"type": "integer", "description": "Target sample rate (Hz). Default 16000."},
                                 "mono": {"type": "boolean", "description": "Downmix to mono. Default true."},
@@ -106,7 +106,7 @@ def get_tools() -> list[dict[str, Any]]:
                                 "start_offset_sec": {"type": "number", "description": "Start offset (seconds). Default 0."},
                                 "end_offset_sec": {"type": "number", "description": "Optional end offset (seconds)."},
                                 "chunk_strategy": {"type": "string", "enum": ["none", "duration", "vad"], "description": "Chunking strategy. Default 'duration'."},
-                                "chunk_duration_sec": {"type": "integer", "description": "Target chunk length (s) for duration strategy. Default 150."},
+                                "chunk_duration_sec": {"type": "integer", "description": "Target chunk length (s) for duration strategy. Default 1800 (30 min)."},
                                 "chunk_overlap_sec": {"type": "number", "description": "Overlap between chunks (s). Default 1.0."},
                                 "chunk_max_sec": {"type": "integer", "description": "Upper bound when using VAD (s). Default 180."},
                                 "io_cache_dir": {"type": "string", "description": "Custom cache directory."},
@@ -125,16 +125,14 @@ def get_tools() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "transcribe_asr",
-                "description": "Transcribe extracted audio (or chunks) using Azure Speech‑to‑Text; updates state.transcript and artifacts.",
+                "description": "Transcribe extracted chunks using Google Gemini over video (preferred); uses concurrency and retries/backoff; updates state.transcript and artifacts.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "language": {"type": "string", "description": "Recognition language (e.g., 'en-US'). Default 'en-US'."},
                         "manifest_path": {"type": "string", "description": "Explicit path to extract manifest JSON; auto-discovered if not provided."},
-                        "azure_key": {"type": "string", "description": "Azure Speech key; falls back to AZURE_SPEECH_KEY env."},
-                        "azure_region": {"type": "string", "description": "Azure region (e.g., 'eastus'); required if no endpoint."},
-                        "azure_endpoint": {"type": "string", "description": "Full endpoint URL overriding region."},
-                        "azure_concurrency": {"type": "integer", "description": "Parallel recognizers to use (default 2)."},
+                        "model": {"type": "string", "description": "Gemini model to use (default via GEMINI_MODEL env)."},
+                        "concurrency": {"type": "integer", "description": "Parallel chunk uploads (default via GEMINI_CONCURRENCY, typically 2)."},
                     },
                     "additionalProperties": False,
                 },
@@ -234,10 +232,8 @@ def dispatch_tool_call(state, name: str, params: dict) -> dict:
                 tool,
                 language=params.get("language", "en-US"),
                 manifest_path=params.get("manifest_path"),
-                azure_key=params.get("azure_key"),
-                azure_region=params.get("azure_region"),
-                azure_endpoint=params.get("azure_endpoint"),
-                azure_concurrency=params.get("azure_concurrency"),
+                model=params.get("model"),
+                concurrency=params.get("concurrency"),
             ),
         )
 
