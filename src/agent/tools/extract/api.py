@@ -304,14 +304,13 @@ def extract_audio_task(
             chunks.append(ch)
             ch_dict = asdict(ch)
 
-            # Export corresponding video chunk (mp4) via stream copy if possible
+            # Export corresponding video chunk (mp4) via stream copy (H.264/AAC source expected)
             video_chunk = base_dir / f"chunk_{idx:04d}_{base}.mp4"
             dur = max(0.01, rel_e - rel_s)
-            # First try stream copy for speed
             cmd_vid_copy = [
                 ffmpeg_bin_local,
                 "-hide_banner",
-                "-ss", f"{rel_s:.3f}",
+                "-ss", f"{abs_s:.3f}",  # use absolute start from original source
                 "-i", str(source),
                 "-t", f"{dur:.3f}",
                 "-map", "0:v:0",
@@ -321,32 +320,7 @@ def extract_audio_task(
                 "-avoid_negative_ts", "make_zero",
                 "-y", str(video_chunk),
             ]
-            code_v, out_v, err_v = _run(cmd_vid_copy, timeout=int(max(60, dur * 6)))
-            # Verify audio presence; fall back if missing or failed
-            probe_chunk = _probe_source(str(video_chunk)) if video_chunk.exists() else {"ok": False}
-            audio_ok = bool(probe_chunk.get("ok") and probe_chunk.get("audio_codec") and probe_chunk.get("channels"))
-            if code_v != 0 or not video_chunk.exists() or not audio_ok:
-                # Fallback to re-encode for this chunk only
-                cmd_vid_encode = [
-                    ffmpeg_bin_local,
-                    "-hide_banner",
-                    "-ss", f"{rel_s:.3f}",
-                    "-i", str(source),
-                    "-t", f"{dur:.3f}",
-                    "-map", "0:v:0",
-                    "-map", "0:a?",
-                    "-c:v", "libx264",
-                    "-preset", "veryfast",
-                    "-crf", "23",
-                    "-c:a", "aac",
-                    "-b:a", "128k",
-                    "-movflags", "+faststart",
-                    "-y", str(video_chunk),
-                ]
-                code_v2, out_v2, err_v2 = _run(cmd_vid_encode, timeout=int(max(120, dur * 10)))
-                if code_v2 != 0:
-                    # Not fatal for extraction; we can proceed with audio-only chunk if video export fails
-                    pass
+            code_v2, out_v2, err_v2 = _run(cmd_vid_copy, timeout=int(max(120, dur * 6)))
             if video_chunk.exists():
                 ch_dict["video_path"] = str(video_chunk)
 

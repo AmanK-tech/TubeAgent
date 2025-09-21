@@ -129,7 +129,7 @@ def _rule_based_next(state, user_text: str) -> Dict[str, Any]:
         src = getattr(getattr(state, "video", None), "source_url", None)
         return {"action": "tool_call", "tool": "extract_audio", "arguments": {"input_url": src}}
     if not art.get("transcribe_asr") or not getattr(state, "transcript", None):
-        return {"action": "tool_call", "tool": "transcribe_asr", "arguments": {"language": "en-US"}}
+        return {"action": "tool_call", "tool": "transcribe_asr", "arguments": {}}
     # Prefer global summary next
     return {"action": "tool_call", "tool": "summarise_global", "arguments": {"user_req": user_text}}
 

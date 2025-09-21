@@ -22,7 +22,7 @@ You have access to these tools via function calling, which must be executed in s
 ### Tool Parameter Hints
 - `fetch_task`: `{ "user_text": "<free‑form text with a YouTube URL>" }`
 - `extract_audio`: `{ "input_url": "<youtube or http(s) url>" }` or `{ "input_path": "</abs/or/relative/path>" }` plus optional `config` fields (sample_rate, normalize, chunk_strategy, etc.).
-- `transcribe_asr`: optional `{ "language": "en-US", "manifest_path": "</path/to/extract_audio.manifest.json>", "model": "gemini-2.5-flash-lite", "concurrency": 2 }`. Do not pass secrets; credentials come from env.
+- `transcribe_asr`: optional `{ "manifest_path": "</path/to/extract_audio.manifest.json>", "model": "gemini-2.5-flash-lite", "concurrency": 2 }`. Do not pass secrets; credentials come from env.
 - `summarise_global`: `{ "user_req": "<what the user asked to produce>" }`.
 - `emit_output`: `{ "text": "<final text>", "formats": ["md","json"], "targets": ["file","console"], "filename": "<base>", "out_dir": "</path>", "side_data": <summary stats> }`.
 - Do not call `summarise_chunk` directly; always call `summarise_global` which decides the strategy and caches per‑chunk outputs when needed.
@@ -115,7 +115,7 @@ For each user request containing a YouTube URL and query:
 Plan:
 - fetch_task with user_text from the user
 - extract_audio with input_url from fetch metadata
-- transcribe_asr (language en-US)
+- transcribe_asr
 - summarise_global with user_req from the user
 - emit_output with text from summarise_global and side_data
 

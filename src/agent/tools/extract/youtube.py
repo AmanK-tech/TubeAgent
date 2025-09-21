@@ -25,11 +25,11 @@ def is_youtube_url(url: str) -> bool:
 
 
 def download_youtube_audio(url: str, out_dir: Path) -> Tuple[Path, Dict[str, Any]]:
-    """Download best available YouTube video with audio (mp4 preferred) using yt-dlp.
+    """Download best available YouTube video with audio (H.264/AAC in MP4) using yt-dlp.
     Returns (downloaded_path, meta). Raises ToolError if yt_dlp missing or download fails.
 
     Note: Despite the name, this function now downloads video-first to support
-    Gemini transcription over video. It prefers MP4 output via yt-dlp merging.
+    Gemini transcription over video. It prefers H.264 video and AAC audio.
     """
     try:
         import yt_dlp  # type: ignore
@@ -40,10 +40,17 @@ def download_youtube_audio(url: str, out_dir: Path) -> Tuple[Path, Dict[str, Any
         ) from e
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Write directly under out_dir, e.g., <downloads>/<video_id>.mp4
     outtmpl = str(out_dir / "%(id)s.%(ext)s")
     ydl_opts = {
-        # Prefer mp4 video+audio; fall back gracefully
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        # Prefer H.264 (AVC) video in MP4 + AAC (mp4a) audio; fall back sensibly
+        # avc1.* for H.264, mp4a.* for AAC in MP4 containers
+        "format": (
+            "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a][acodec^=mp4a]/"
+            "best[ext=mp4][vcodec^=avc1][acodec^=mp4a]/"
+            "best[ext=mp4]/"
+            "best"
+        ),
         "merge_output_format": "mp4",
         "outtmpl": outtmpl,
         "noplaylist": True,

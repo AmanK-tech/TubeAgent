@@ -14,7 +14,7 @@ TOOL‑CALLING RULES
 DEFAULT SEQUENCE (when starting from a YouTube link)
 1) fetch_task            → { "user_text": "<user message containing the URL>" }
 2) extract_audio         → { "input_url": "<normalized URL from fetch>" }  (downloads video, chunks MP4+WAV)
-3) transcribe_asr        → { "language": "en-US" }  (Gemini over video chunks; adjust only if the user specifies)
+3) transcribe_asr        → { }  (Gemini over video chunks)
 4) summarise_global      → { "user_req": "<the user’s request>" }  (this decides the strategy internally)
 5) emit_output           → { "text": "<final text>",
                               "side_data": state.artifacts["summarise_global"],
@@ -31,7 +31,7 @@ POLICIES & CONSTRAINTS
 PARAMETER HINTS
 - fetch_task:      { "user_text": "..." }
 - extract_audio:   { "input_url": "..." }  or  { "input_path": "..." }  (+ optional "config")
-- transcribe_asr:  { "language": "en-US" }  (+ optional "manifest_path", "model", "concurrency")
+- transcribe_asr:  { "manifest_path": "...", "model": "...", "concurrency": N }
 - summarise_global:{ "user_req": "..." }  (+ optional "intent" if provided by a planner)
 - emit_output:     { "text": "...", "formats": ["md","txt","json"], "targets": ["file","console","api"],
                      "filename": "...", "out_dir": "...", "side_data": { ... } }

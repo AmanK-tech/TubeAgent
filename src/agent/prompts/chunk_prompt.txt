@@ -43,7 +43,7 @@ STYLE & QUALITY
 - Faithful, concise, well-organized.
 - No filler, no speculation.
 - Use quotes strategically for authority/precision.
-- Use plain language unless tone is specified.
+- Use plain wording unless tone is specified.
 - Avoid boilerplate phrases like "Based on the transcript" or "From this chunk" — write directly.
 
 ERROR & GAPS POLICY

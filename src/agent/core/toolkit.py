@@ -129,7 +129,6 @@ def get_tools() -> list[dict[str, Any]]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "language": {"type": "string", "description": "Recognition language (e.g., 'en-US'). Default 'en-US'."},
                         "manifest_path": {"type": "string", "description": "Explicit path to extract manifest JSON; auto-discovered if not provided."},
                         "model": {"type": "string", "description": "Gemini model to use (default via GEMINI_MODEL env)."},
                         "concurrency": {"type": "integer", "description": "Parallel chunk uploads (default via GEMINI_CONCURRENCY, typically 2)."},
@@ -230,7 +229,6 @@ def dispatch_tool_call(state, name: str, params: dict) -> dict:
             lambda: transcribe_task(
                 state,
                 tool,
-                language=params.get("language", "en-US"),
                 manifest_path=params.get("manifest_path"),
                 model=params.get("model"),
                 concurrency=params.get("concurrency"),
