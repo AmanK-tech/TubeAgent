@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from dataclasses import asdict
+import base64
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,7 +13,7 @@ import math
 
 from agent.core.state import AgentState, Chunk
 from agent.errors import ToolError
-from agent.tools.extract.ffmpeg_utils import _ffmpeg_path, _run
+from agent.tools.extract.ffmpeg_utils import _ffmpeg_path, _run, _probe_source
 
 
 def _load_manifest(path: Path) -> Dict[str, Any]:
@@ -90,11 +91,45 @@ def _sum_planned_minutes(chunks: List[Dict[str, Any]]) -> float:
 # Legacy STT implementation removed — Gemini is the only transcription backend.
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _wait_for_file_active(client, file_name: str, max_wait_time: float = 300.0) -> bool:
+    start = time.time()
+    sleep_s = 2.0
+    while (time.time() - start) < max_wait_time:
+        try:
+            f = client.files.get(file_name)  # type: ignore[arg-type]
+            state = getattr(f, "state", None)
+            # state might be an enum with .name or just a string
+            state_name = getattr(state, "name", None) or str(state or "").upper()
+            if state_name == "ACTIVE":
+                return True
+            if state_name == "FAILED":
+                return False
+        except Exception:
+            # transient get failure; keep waiting
+            pass
+        time.sleep(sleep_s)
+        sleep_s = min(8.0, sleep_s * 1.5)
+    return False
+
+
+def _cleanup_gemini_file(client, file_name: str) -> None:
+    try:
+        client.files.delete(file_name)  # type: ignore[arg-type]
+    except Exception:
+        pass
+
+
 def _transcribe_chunk_gemini(
     media_path: str,
     *,
     model: str,
-    language: str = "en-US",
     timeout_sec: Optional[float] = None,  # kept for interface parity; not used directly
 ) -> Tuple[str, List[Dict[str, Any]]]:
     try:
@@ -110,27 +145,83 @@ def _transcribe_chunk_gemini(
     except Exception as e:
         raise ToolError(f"Failed to initialize Gemini client: {e}", tool_name="transcribe_asr")
 
+    # Decide whether to use inline (base64) or Files API based on size
     try:
-        myfile = client.files.upload(file=media_path)
-    except Exception as e:
-        raise ToolError(f"Gemini file upload failed: {e}", tool_name="transcribe_asr")
+        file_size = Path(media_path).stat().st_size
+    except Exception:
+        file_size = 0
+    inline_max_mb_env = os.getenv("GEMINI_INLINE_MAX_MB", "20")
+    try:
+        inline_max_bytes = int(float(inline_max_mb_env) * 1024 * 1024)
+    except Exception:
+        inline_max_bytes = 20 * 1024 * 1024
 
+    # Prepare prompt first (prompt is locale-agnostic)
     prompt = (
-        f"Transcribe the spoken audio and any visible on-screen text. "
-        f"Language: {language}. Do not summarize. Return only the transcript."
+        "Transcribe the audio from this video, giving timestamps for salient events in the video. Also provide visual descriptions."
     )
 
-    try:
-        response = client.models.generate_content(
-            model=model,
-            contents=[myfile, prompt],
-        )
-    except Exception as e:
-        # Surface raw error; retry logic is handled by caller
-        raise ToolError(f"Gemini generate_content failed: {e}", tool_name="transcribe_asr")
+    use_inline = file_size > 0 and file_size <= inline_max_bytes
+    response = None
+    upload_type = "inline" if use_inline else "files"
+
+    if use_inline:
+        # Inline base64 for smaller files to avoid Files API latency
+        try:
+            ext = Path(media_path).suffix.lower()
+            if ext == ".mp4":
+                mime = "video/mp4"
+            elif ext == ".m4a":
+                mime = "audio/mp4"
+            elif ext == ".wav":
+                mime = "audio/wav"
+            else:
+                mime = "application/octet-stream"
+            with open(media_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("ascii")
+            # Many client versions accept a simple list of parts: [inline_data, prompt] or [prompt, inline_data]
+            inline_part = {"inline_data": {"mime_type": mime, "data": b64}}
+            response = client.models.generate_content(
+                model=model,
+                contents=[inline_part, prompt],
+            )
+        except Exception as e:
+            raise ToolError(f"Gemini inline generate_content failed: {e}", tool_name="transcribe_asr")
+    else:
+        # Use Files API for larger files
+        try:
+            myfile = client.files.upload(file=media_path)
+        except Exception as e:
+            raise ToolError(f"Gemini file upload failed: {e}", tool_name="transcribe_asr")
+
+        # Wait for file to become ACTIVE before use
+        file_name = getattr(myfile, "name", None) or getattr(myfile, "id", None) or str(myfile)
+        max_wait_env = os.getenv("GEMINI_FILE_WAIT_TIMEOUT")
+        try:
+            max_wait = float(max_wait_env) if max_wait_env is not None else (float(timeout_sec) if timeout_sec else 300.0)
+        except Exception:
+            max_wait = float(timeout_sec or 300.0)
+        became_active = _wait_for_file_active(client, file_name, max_wait_time=max_wait)
+        if not became_active:
+            if _env_bool("GEMINI_FILE_CLEANUP", False):
+                _cleanup_gemini_file(client, file_name)
+            raise ToolError(
+                f"Gemini uploaded file did not become ACTIVE within {int(max_wait)}s (file={file_name}).",
+                tool_name="transcribe_asr",
+            )
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=[myfile, prompt],
+            )
+        except Exception as e:
+            raise ToolError(f"Gemini generate_content failed: {e}", tool_name="transcribe_asr")
+        finally:
+            if _env_bool("GEMINI_FILE_CLEANUP", False):
+                _cleanup_gemini_file(client, file_name)
 
     text = (getattr(response, "text", None) or "").strip()
-    raw = [{"text": text, "model": model}]
+    raw = [{"text": text, "model": model, "upload_type": upload_type, "size_bytes": file_size}]
     return text, raw
 
 
@@ -222,6 +313,8 @@ def _split_media_into_subchunks(
                 "aac",
                 "-b:a",
                 "128k",
+                "-ac",
+                "2",
                 "-movflags",
                 "+faststart",
                 "-y",
@@ -239,7 +332,6 @@ def transcribe_task(
     state: AgentState,
     tool_name: str = "transcribe_asr",
     *,
-    language: str = "en-US",
     manifest_path: Optional[str] = None,
     model: Optional[str] = None,
     concurrency: Optional[int] = None,
@@ -252,7 +344,6 @@ def transcribe_task(
         transcribe_task(
             state,
             tool_name="transcribe_asr",
-            language="en-US",
             model="gemini-2.5-flash-lite",
             concurrency=2,
         )
@@ -260,7 +351,6 @@ def transcribe_task(
     Args:
         state (AgentState): Agent state; uses extract manifest from artifacts or `manifest_path`.
         tool_name (str): Tool label; default "transcribe_asr".
-        language (str): Recognition language code (e.g., "en-US").
         manifest_path (str, optional): Explicit path to an extract manifest JSON.
         Requires GOOGLE_API_KEY in env. Concurrency via GEMINI_CONCURRENCY or `concurrency` arg.
 
@@ -328,7 +418,6 @@ def transcribe_task(
     chunks_out: List[Chunk] = []
     artifacts: Dict[str, Any] = {
         "manifest_path": str(manifest_p),
-        "language": language,
         "gemini_model": gemini_model,
         "chunks": [],
     }
@@ -360,6 +449,16 @@ def transcribe_task(
         wav_path = ch.get("path")
         video_path = ch.get("video_path")
         media_path = video_path or wav_path
+        # If a video chunk exists but has no audio stream, fall back to WAV for this chunk
+        if video_path and Path(video_path).exists():
+            try:
+                pr = _probe_source(str(video_path))
+                has_audio = bool(pr.get("ok") and pr.get("audio_codec") and pr.get("channels"))
+                if not has_audio and wav_path and Path(wav_path).exists():
+                    media_path = wav_path
+            except Exception:
+                # ignore probe issues; proceed with selected media_path
+                pass
         if not media_path or not Path(media_path).exists():
             raise ToolError(f"Chunk not found: {media_path}", tool_name=tool)
         idx = int(ch.get("idx", 0))
@@ -391,7 +490,6 @@ def transcribe_task(
                 text, raw = _transcribe_chunk_gemini(
                     media_path,
                     model=gemini_model,
-                    language=language,
                     timeout_sec=timeout,
                 )
                 # Write files per chunk
@@ -416,7 +514,14 @@ def transcribe_task(
                             sub_texts: List[str] = []
                             sub_raw: List[Dict[str, Any]] = []
                             for sp in subpaths:
-                                t_sub, r_sub = _transcribe_chunk_gemini(str(sp), model=gemini_model, language=language, timeout_sec=max(min_timeout, ((dur_s / max(1, len(subpaths))) * timeout_factor) + 20.0))
+                                t_sub, r_sub = _transcribe_chunk_gemini(
+                                    str(sp),
+                                    model=gemini_model,
+                                    timeout_sec=max(
+                                        min_timeout,
+                                        ((dur_s / max(1, len(subpaths))) * timeout_factor) + 20.0,
+                                    ),
+                                )
                                 sub_texts.append(t_sub or "")
                                 sub_raw.append({"path": str(sp), "text": t_sub or ""})
                             text = "\n\n".join([t.strip() for t in sub_texts if t])

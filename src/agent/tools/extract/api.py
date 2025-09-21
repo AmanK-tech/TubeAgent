@@ -314,13 +314,18 @@ def extract_audio_task(
                 "-ss", f"{rel_s:.3f}",
                 "-i", str(source),
                 "-t", f"{dur:.3f}",
+                "-map", "0:v:0",
+                "-map", "0:a?",
                 "-c", "copy",
                 "-movflags", "+faststart",
                 "-avoid_negative_ts", "make_zero",
                 "-y", str(video_chunk),
             ]
             code_v, out_v, err_v = _run(cmd_vid_copy, timeout=int(max(60, dur * 6)))
-            if code_v != 0 or not video_chunk.exists():
+            # Verify audio presence; fall back if missing or failed
+            probe_chunk = _probe_source(str(video_chunk)) if video_chunk.exists() else {"ok": False}
+            audio_ok = bool(probe_chunk.get("ok") and probe_chunk.get("audio_codec") and probe_chunk.get("channels"))
+            if code_v != 0 or not video_chunk.exists() or not audio_ok:
                 # Fallback to re-encode for this chunk only
                 cmd_vid_encode = [
                     ffmpeg_bin_local,
@@ -328,6 +333,8 @@ def extract_audio_task(
                     "-ss", f"{rel_s:.3f}",
                     "-i", str(source),
                     "-t", f"{dur:.3f}",
+                    "-map", "0:v:0",
+                    "-map", "0:a?",
                     "-c:v", "libx264",
                     "-preset", "veryfast",
                     "-crf", "23",
