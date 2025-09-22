@@ -2,6 +2,8 @@
 
 Goal: Use Google Gemini (`gemini-2.5-flash-lite`) for transcription while preserving the existing core logic: manifest discovery, chunk-wise processing, concurrency, retries/backoff, per‑chunk artifacts, and combined transcript — and move to a video‑first pipeline (always process video, not audio).
 
+Update: Summarization is now integrated with Gemini inside `transcribe.py` (per‑chunk summaries during ASR and a global summary via `summarise_gemini`).
+
 ## Outcomes
 - Keep the public tool API (`transcribe_asr`) and overall flow unchanged for callers.
 - Use Gemini via `google.genai` for chunk transcription.

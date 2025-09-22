@@ -29,7 +29,7 @@ def _load_planner_system() -> str:
 
 PLANNER_SCHEMA_INSTRUCTION = (
     "\nYou must respond with a SINGLE JSON object only, matching exactly one of:\n"
-    "{\n  \"action\": \"tool_call\",\n  \"tool\": \"<one of: fetch_task | extract_audio | transcribe_asr | summarise_global | emit_output>\",\n  \"arguments\": { /* JSON args for the tool */ }\n}\n"
+    "{\n  \"action\": \"tool_call\",\n  \"tool\": \"<one of: fetch_task | extract_audio | transcribe_asr | emit_output>\",\n  \"arguments\": { /* JSON args for the tool */ }\n}\n"
     "or\n"
     "{\n  \"action\": \"final\",\n  \"content\": \"<final assistant text>\"\n}\n"
     "Do not include any other text, code fences, or commentary."
@@ -67,8 +67,8 @@ def _normalize_tool_name(name: str) -> str:
         "extract_audio": "extract_audio",
         "transcribe": "transcribe_asr",
         "transcribe_asr": "transcribe_asr",
-        "summarize_global": "summarise_global",
-        "summarise_global": "summarise_global",
+        "summarize_global": "transcribe_asr",
+        "summarise_global": "transcribe_asr",
         "emit": "emit_output",
         "emit_output": "emit_output",
     }
@@ -130,8 +130,8 @@ def _rule_based_next(state, user_text: str) -> Dict[str, Any]:
         return {"action": "tool_call", "tool": "extract_audio", "arguments": {"input_url": src}}
     if not art.get("transcribe_asr") or not getattr(state, "transcript", None):
         return {"action": "tool_call", "tool": "transcribe_asr", "arguments": {}}
-    # Prefer global summary next
-    return {"action": "tool_call", "tool": "summarise_global", "arguments": {"user_req": user_text}}
+    # Prefer integrated global summary next via transcribe_asr
+    return {"action": "tool_call", "tool": "transcribe_asr", "arguments": {"user_req": user_text}}
 
 
 # ---------------------- Query Intent Classification -------------------------
@@ -265,8 +265,6 @@ def _validate_action(state, plan: Dict[str, Any]) -> Tuple[bool, Optional[Dict[s
             return False, _rule_based_next(state, plan.get("arguments", {}).get("user_text", "")), "missing_video"
         if tool == "transcribe_asr" and not art.get("extract_audio"):
             return False, _rule_based_next(state, ""), "missing_extract"
-        if tool == "summarise_global" and not (getattr(state, "transcript", None) or getattr(state, "chunks", None)):
-            return False, _rule_based_next(state, plan.get("arguments", {}).get("user_req", "")), "missing_transcript"
         return True, None, "ok"
     except Exception as e:
         return True, None, f"validate_error:{e}"
@@ -329,7 +327,7 @@ class Planner:
             args = {"user_req": user_text, "intent": intent}
             if _has_metadata(state) and _wants_metadata(user_text, intent):
                 args["include_metadata"] = True
-            obj = {"action": "tool_call", "tool": "summarise_global", "arguments": args}
+            obj = {"action": "tool_call", "tool": "transcribe_asr", "arguments": args}
         else:
             if not self.use_llm:
                 obj = _rule_based_next(state, user_text)
@@ -363,13 +361,13 @@ class Planner:
             args = obj.get("arguments") or {}
             if obj["tool"] == "fetch_task" and "user_text" not in args:
                 args["user_text"] = user_text
-            if obj["tool"] == "summarise_global" and "user_req" not in args:
+            if obj["tool"] == "transcribe_asr" and "user_req" not in args:
                 args["user_req"] = user_text
             # carry intent hint forward for downstream tools if helpful
-            if intent and obj["tool"] == "summarise_global" and "intent" not in args:
+            if intent and obj["tool"] == "transcribe_asr" and "intent" not in args:
                 args["intent"] = intent
             # attach include_metadata when warranted and metadata exists
-            if obj["tool"] == "summarise_global" and "include_metadata" not in args:
+            if obj["tool"] == "transcribe_asr" and "include_metadata" not in args:
                 if _has_metadata(state) and _wants_metadata(user_text, intent):
                     args["include_metadata"] = True
             obj["arguments"] = args

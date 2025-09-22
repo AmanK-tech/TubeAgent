@@ -14,9 +14,8 @@ TOOL‑CALLING RULES
 DEFAULT SEQUENCE (when starting from a YouTube link)
 1) fetch_task            → { "user_text": "<user message containing the URL>" }
 2) extract_audio         → { "input_url": "<normalized URL from fetch>" }  (downloads video, chunks MP4+WAV)
-3) transcribe_asr        → { }  (Gemini over video chunks)
-4) summarise_global      → { "user_req": "<the user’s request>" }  (this decides the strategy internally)
-5) emit_output           → { "text": "<final text>",
+3) transcribe_asr        → { "user_req": "<the user’s request>", "intent": "<optional>", "include_metadata": true }  (Gemini over chunks + global summary)
+4) emit_output           → { "text": "<final text>",
                               "side_data": state.artifacts["summarise_global"],
                               "formats": ["md"],
                               "targets": ["file","console"] }
@@ -26,13 +25,12 @@ POLICIES & CONSTRAINTS
 - URL validation: If no valid single video URL (not a playlist) is provided, ask the user for one.
 - Reuse: Prefer existing artifacts (manifest, transcripts, cached summaries) and avoid recomputation unless necessary.
 - Long outputs: Persist via emit_output and provide a brief preview in the final answer.
-- Efficiency: If a transcript already exists, you may skip fetch/extract and go straight to summarise_global.
+- Efficiency: If a transcript already exists, you may skip fetch/extract and go straight to transcribe_asr with `user_req`.
 
 PARAMETER HINTS
 - fetch_task:      { "user_text": "..." }
 - extract_audio:   { "input_url": "..." }  or  { "input_path": "..." }  (+ optional "config")
-- transcribe_asr:  { "manifest_path": "...", "model": "...", "concurrency": N }
-- summarise_global:{ "user_req": "..." }  (+ optional "intent" if provided by a planner)
+- transcribe_asr:  { "manifest_path": "...", "model": "...", "concurrency": N, "user_req": "...", "intent": "...", "include_metadata": true }
 - emit_output:     { "text": "...", "formats": ["md","txt","json"], "targets": ["file","console","api"],
                      "filename": "...", "out_dir": "...", "side_data": { ... } }
 

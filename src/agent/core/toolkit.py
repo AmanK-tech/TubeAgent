@@ -8,10 +8,11 @@ from agent.core.config import ExtractAudioConfig
 from agent.tools.fetch import fetch_task
 from agent.tools.extract import extract_audio_task
 from agent.tools.transcribe import transcribe_task
-from agent.tools.summarise_global import summarise_global
 from agent.tools.emit_output import emit_output
 from agent.tools.answer_from_metadata import answer_from_metadata
 from agent.llm.client import LLMClient
+from agent.tools.transcribe import summarise_gemini
+
 
 def to_jsonable(obj:Any) -> Any:
     if dataclasses.is_dataclass(obj):
@@ -45,8 +46,7 @@ def get_tools() -> list[dict[str, Any]]:
     Tools covered:
       - fetch_task
       - extract_audio
-      - transcribe_asr
-      - summarise_global
+      - transcribe_asr (can optionally summarise)
       - emit_output
     """
     tools = [
@@ -125,35 +125,22 @@ def get_tools() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "transcribe_asr",
-                "description": "Transcribe extracted chunks using Google Gemini over video (preferred); uses concurrency and retries/backoff; updates state.transcript and artifacts.",
+                "description": "Transcribe chunks with Gemini; optionally also produce a global summary when 'user_req' is provided.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "manifest_path": {"type": "string", "description": "Explicit path to extract manifest JSON; auto-discovered if not provided."},
                         "model": {"type": "string", "description": "Gemini model to use (default via GEMINI_MODEL env)."},
                         "concurrency": {"type": "integer", "description": "Parallel chunk uploads (default via GEMINI_CONCURRENCY, typically 2)."},
+                        "user_req": {"type": "string", "description": "If set, run global summarization immediately after transcription and return the final text."},
+                        "intent": {"type": "string", "description": "Optional intent hint for summarization (e.g., summary, question, search)."},
+                        "include_metadata": {"type": "boolean", "description": "If true, include video title/channel/URL as grounding for summarization."},
                     },
                     "additionalProperties": False,
                 },
             },
         },
-        {
-            "type": "function",
-            "function": {
-                "name": "summarise_global",
-                "description": "Synthesize a coherent final summary across transcript chunks (and cached per‑chunk summaries).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "user_req": {"type": "string", "description": "Instruction describing the desired final output."},
-                        "intent": {"type": "string", "description": "Optional planner-provided intent hint (e.g., 'summary','question','search','fact_extraction')."},
-                        "include_metadata": {"type": "boolean", "description": "If true, include video title/channel/URL as grounding alongside transcript."},
-                    },
-                    "required": ["user_req"],
-                    "additionalProperties": False,
-                },
-            },
-        },
+        
         {
             "type": "function",
             "function": {
@@ -223,20 +210,33 @@ def dispatch_tool_call(state, name: str, params: dict) -> dict:
         )
 
     if tool == "transcribe_asr":
-        return run_tool_json(
-            state,
-            tool,
-            lambda: transcribe_task(
+        def _do_transcribe_and_maybe_summarise():
+            # Always transcribe first
+            transcribe_task(
                 state,
                 tool,
                 manifest_path=params.get("manifest_path"),
                 model=params.get("model"),
                 concurrency=params.get("concurrency"),
-            ),
-        )
+            )
+            # If user_req provided, run global summary now and return text
+            user_req = params.get("user_req")
+            if isinstance(user_req, str) and user_req.strip():
+                return summarise_gemini(
+                    state,
+                    user_req,
+                    intent=params.get("intent"),
+                    include_metadata=bool(params.get("include_metadata", False)),
+                )
+            # Otherwise return a compact report of chunk metadata
+            ta = (getattr(state, "artifacts", {}) or {}).get("transcribe_asr", {})
+            return {
+                "chunks": ta.get("chunks"),
+                "combined_transcript_path": ta.get("combined_transcript_path"),
+                "gemini_model": ta.get("gemini_model"),
+            }
 
-    if tool == "summarise_global":
-        return run_tool_json(state, tool, lambda: summarise_global(state, params["user_req"], intent=params.get("intent"), include_metadata=bool(params.get("include_metadata", False))))
+        return run_tool_json(state, tool, _do_transcribe_and_maybe_summarise)
 
     if tool == "emit_output":
         return run_tool_json(
