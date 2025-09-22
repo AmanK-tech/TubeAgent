@@ -222,3 +222,14 @@ runtime/**
 /local_check_summarise_global.py
 
 
+# macOS
+.DS_Store
+
+# Large media artifacts (avoid accidental commits)
+*.mp3
+*.wav
+*.m4a
+*.mp4
+*.mkv
+*.webm
+
