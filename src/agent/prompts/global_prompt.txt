@@ -8,7 +8,7 @@ CRITICAL RULES
 - Preserve all important details (names, dates, examples, figures).
 - Resolve contradictions by reporting them; do not “fix” them.
 - If information needed for the request is missing from the transcript, clearly state what is missing.
-- When referring to moments, you may add approximate timestamps like [hh:mm:ss] or [mm:ss]. If chunk timestamps are relative, note them as such.
+- Do not include timestamps in the output unless the user explicitly requests them.
 
 INPUT FORMAT
 You will receive:

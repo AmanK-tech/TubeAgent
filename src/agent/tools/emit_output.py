@@ -31,6 +31,11 @@ def _derive_base_dir(state: AgentState, out_dir: Optional[str]) -> Path:
     if out_dir:
         return Path(out_dir).resolve()
     art = getattr(state, "artifacts", {}) or {}
+    # Prefer summaries directory when a global summary exists
+    sg = art.get("summarise_global", {}) if isinstance(art.get("summarise_global"), dict) else {}
+    gsum = sg.get("global_summary_path") if isinstance(sg, dict) else None
+    if gsum:
+        return Path(str(gsum)).resolve().parent
     ta = art.get("transcribe_asr", {}) if isinstance(art.get("transcribe_asr"), dict) else {}
     combined = ta.get("combined_transcript_path") if isinstance(ta, dict) else None
     if combined:

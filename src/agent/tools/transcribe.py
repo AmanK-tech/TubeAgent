@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from agent.core.state import AgentState, Chunk
 from agent.errors import ToolError
+from agent.contextengineering import allocate_tokens, to_generation_config
 
 try:
     from google import genai  
@@ -152,7 +153,8 @@ def transcribe_task(
         raise ToolError("No extract manifest found. Run extract_audio first.", tool_name=tool)
 
     manifest = _load_manifest(manifest_p)
-    chunks_meta = manifest.get("result", {}).get("chunks", [])
+    res = manifest.get("result", {})
+    chunks_meta = res.get("chunks", [])
     if not chunks_meta:
         # Single-file fallback
         wav_path = manifest.get("result", {}).get("wav_path")
@@ -160,6 +162,21 @@ def transcribe_task(
         if not wav_path:
             raise ToolError("Manifest missing wav_path.", tool_name=tool)
         chunks_meta = [{"idx": 0, "start_sec": 0.0, "end_sec": dur, "path": str(wav_path)}]
+
+    # Determine media preference: use audio-only (WAV) for very long videos
+    try:
+        total_duration_s = float(res.get("duration", 0.0) or 0.0)
+    except Exception:
+        # Fallback to max chunk end if duration missing
+        try:
+            total_duration_s = max(float(ch.get("end_sec", 0.0) or 0.0) for ch in chunks_meta) if chunks_meta else 0.0
+        except Exception:
+            total_duration_s = 0.0
+    try:
+        audio_only_minutes = float(os.getenv("ASR_AUDIO_ONLY_MINUTES", "60") or 60)
+    except Exception:
+        audio_only_minutes = 60.0
+    prefer_wav = total_duration_s >= (audio_only_minutes * 60.0)
 
     # Client and model
     client = _init_gemini_client(tool)
@@ -177,7 +194,7 @@ def transcribe_task(
         idx = int(ch.get("idx", 0))
         start_s = float(ch.get("start_sec", 0.0))
         end_s = float(ch.get("end_sec", max(start_s, 0.0)))
-        media_path = ch.get("video_path") or ch.get("path")
+        media_path = (ch.get("path") if prefer_wav else (ch.get("video_path") or ch.get("path")))
         if not media_path or not Path(media_path).exists():
             raise ToolError(f"Chunk not found: {media_path}", tool_name=tool)
 
@@ -198,19 +215,65 @@ def transcribe_task(
             raise ToolError(f"Gemini file did not become ACTIVE within {int(max_wait)}s (chunk {idx}).", tool_name=tool)
 
         # Transcribe + Summarize (single call, structured output)
-        # Strong delimiters for robust parsing
+        # Inline prompt with exact delimiters as required by downstream parsing
         prompt = (
-            "You are transcribing one media chunk and then summarizing it.\n"
-            f"Chunk bounds: start={_fmt_ts(start_s)}, end={_fmt_ts(end_s)}.\n"
-            "Return output using EXACT delimiters below.\n\n"
+            "You are an expert transcriptionist and content analyst processing a media segment.\n"
+            f"Segment bounds: start={_fmt_ts(start_s)}, end={_fmt_ts(end_s)}.\n\n"
+            "TRANSCRIPTION REQUIREMENTS:\n\n"
+            "SPEECH & AUDIO:\n"
+            "• Transcribe ALL spoken words with maximum accuracy\n"
+            "• Preserve natural speech patterns: \"um\", \"uh\", false starts, repetitions, interruptions\n"
+            "• Use clear speaker labels: \"Speaker 1:\", \"Host:\", \"Interviewer:\", \"Guest:\", etc.\n"
+            "• Mark unclear speech: [inaudible], [unclear], [mumbled]\n"
+            "• Note overlapping speech: [Speaker 1 & 2 speaking simultaneously]\n"
+            "• Include meaningful pauses: [pause], [long pause]\n"
+            "• Capture relevant audio cues: [music], [applause], [phone ringing], [door closing]\n"
+            "• Note audio quality issues: [low quality], [distorted], [echo], [static]\n\n"
+            "VISUAL ELEMENTS (for video content):\n"
+            "• Transcribe ALL readable on-screen text, captions, titles, signs, documents\n"
+            "• Format as [SCREEN TEXT: \"content\"], [CAPTION: \"subtitle\"], [SIGN: \"exit\"]\n"
+            "• Include UI elements: [BUTTON: \"Submit\"], [MENU: \"File > Save\"]\n"
+            "• Note visual context: [showing graph], [pointing to screen], [slide change]\n"
+            "• Capture timestamps, URLs, phone numbers if clearly visible\n"
+            "• Include title cards, lower thirds, and visual overlays\n\n"
+            "CONTENT ORGANIZATION:\n"
+            "• Maintain chronological order within the segment\n"
+            "• Use natural paragraph breaks for topic shifts\n"
+            "• Preserve conversational flow and turn-taking\n"
+            "• Include relevant context for references (\"as mentioned earlier\", \"this chart shows\")\n\n"
+            "ACCURACY STANDARDS:\n"
+            "• Prioritize precision over interpretation\n"
+            "• Do not add commentary, analysis, or speculation\n"
+            "• Include exact quotes, especially for important statements\n"
+            "• Note when content seems incomplete or cut off\n"
+            "• Mark technical terms, names, or specialized vocabulary carefully\n\n"
+            "ERROR HANDLING:\n"
+            "• Use [inaudible] for speech that cannot be understood\n"
+            "• Use [unclear: possible word] for best-guess transcription\n"
+            "• Note [audio cuts out] or [video freezes] for technical issues\n"
+            "• Mark [multiple speakers - unclear] when speaker separation is impossible\n\n"
+            "OUTPUT FORMAT - Use these EXACT delimiters:\n\n"
             "<TRANSCRIPT>\n"
-            "Transcribe all spoken words and clearly readable on-screen text.\n"
-            "Do not include commentary.\n"
+            "Provide the complete, accurate transcription here.\n\n"
+            "Include all speech, on-screen text, and relevant audio/visual cues.\n"
+            "Use proper punctuation, capitalization, and speaker labels.\n"
+            "Maintain natural flow while being comprehensive.\n"
+            "No commentary or interpretation - only what is actually present.\n"
             "</TRANSCRIPT>\n\n"
             "<SUMMARY>\n"
-            "Provide a concise, faithful summary (5-10 bullets).\n"
-            "Use only information present in this chunk.\n"
-            "</SUMMARY>\n"
+            "Provide 4-8 concise bullet points covering:\n"
+            "• Primary topics, themes, or subjects discussed\n"
+            "• Key information, facts, decisions, or announcements\n"
+            "• Important speakers, participants, or sources mentioned\n"
+            "• Significant events, changes, or developments in this segment\n"
+            "• Critical visual information (charts, documents, demonstrations)\n"
+            "• Notable quotes or statements (if particularly important)\n"
+            "• Context that connects to likely adjacent segments\n\n"
+            "Base summary only on content actually present in this specific segment.\n"
+            "Use clear, factual language without speculation or interpretation.\n"
+            "Do not include timestamps in the SUMMARY.\n"
+            "</SUMMARY>\n\n"
+            "CRITICAL: Use the EXACT delimiter tags shown above. The parsing system depends on finding \"<TRANSCRIPT>\" and \"</TRANSCRIPT>\" as well as \"<SUMMARY>\" and \"</SUMMARY>\" exactly as written."
         )
         try:
             response = client.models.generate_content(
@@ -241,6 +304,7 @@ def transcribe_task(
                         "gemini_file_name": getattr(myfile, "name", None) or getattr(myfile, "id", None),
                         "text": text,
                         "summary": summary_text,
+                        "used_media_kind": ("audio_wav" if str(media_path).lower().endswith(".wav") else "video"),
                     },
                     f,
                 )
@@ -254,7 +318,9 @@ def transcribe_task(
                 "idx": idx,
                 "start_sec": start_s,
                 "end_sec": end_s,
-                "video_path": media_path,
+                "video_path": ch.get("video_path"),
+                "used_media_path": media_path,
+                "used_media_kind": ("audio_wav" if str(media_path).lower().endswith(".wav") else "video"),
                 "text_path": str(txt_path),
                 "json_path": str(json_path),
                 "summary_path": str(sum_path),
@@ -368,6 +434,36 @@ def summarise_gemini(
             pass
     meta_text = "\n".join(meta_lines) if meta_lines else ""
 
+    # Compute token allocation for the answer based on duration, query, and transcript length
+    try:
+        vid = getattr(state, "video", None)
+        # Prefer manifest duration, then state.video, then chunk-derived duration
+        duration_s = 0.0
+        try:
+            if manifest_path:
+                _m = _load_manifest(Path(manifest_path))
+                duration_s = float(((_m.get("result") or {}).get("duration") or 0.0))
+        except Exception:
+            duration_s = 0.0
+        if not duration_s and vid and getattr(vid, "duration_s", None) is not None:
+            duration_s = float(getattr(vid, "duration_s", 0) or 0)
+        if not duration_s:
+            duration_s = float(total_duration_s or 0.0)
+
+        title = getattr(vid, "title", None) if vid else None
+        _alloc = allocate_tokens(
+            video_duration_s=duration_s,
+            query_text=user_req,
+            title=title,
+            transcript_chars=total_chars,
+        )
+        _gen_cfg = to_generation_config(_alloc)
+        _target_len_line = f"Target length: around {_alloc.tokens} tokens.\n"
+    except Exception:
+        _alloc = None
+        _gen_cfg = {}
+        _target_len_line = ""
+
     total_minutes = float(total_duration_s) / 60.0 if total_duration_s else 0.0
 
     def _direct_multimodal() -> str:
@@ -378,7 +474,9 @@ def summarise_gemini(
         user_prompt_text = (
             f"User request:\n{req_with_intent}\n\n"
             f"{meta_block}"
-            "Based on the following media files (chunks), provide a comprehensive, grounded response."
+            "Based on the following media files (chunks), provide a comprehensive, grounded response.\n"
+            "Important: Do not include any timestamps in the output.\n"
+            f"{_target_len_line}"
         )
         contents.append(user_prompt_text)
 
@@ -401,16 +499,22 @@ def summarise_gemini(
             if mf is not None:
                 contents.append(mf)
 
-        response = client.models.generate_content(model=model, contents=contents, request_options={"timeout": 600})
+        if _gen_cfg:
+            response = client.models.generate_content(model=model, contents=contents, generation_config=_gen_cfg, request_options={"timeout": 600})
+        else:
+            response = client.models.generate_content(model=model, contents=contents, request_options={"timeout": 600})
         return getattr(response, "text", None) or ""
 
     def _map_reduce() -> str:
         system_instruction = _load_prompt_text("global_prompt.txt")
         header = [f"User request:\n{user_req}"]
+        header.append("Important: Do not include any timestamps in the output.")
         if intent and isinstance(intent, str) and intent.strip():
             header.append(f"Intent: {intent.strip()}")
         if meta_text:
             header.append(f"\nVideo metadata:\n{meta_text}")
+        if _target_len_line:
+            header.append(_target_len_line.strip())
         header.append("\nBelow are per-chunk summaries and short raw excerpts. Synthesize them into a single, coherent response.")
         header.append("CHUNKS:")
 
@@ -425,13 +529,16 @@ def summarise_gemini(
             parts.append(
                 (
                     f"---\n"
-                    f"Chunk {ch['idx']} [{_fmt_ts(ch['start_s'])} - {_fmt_ts(ch['end_s'])}]\n"
+                    f"Chunk {ch['idx']}\n"
                     f"Summary of this chunk:\n{(ch.get('summary') or '').strip()}\n\n"
                     f"Transcript excerpt:\n{excerpt.strip()}\n"
                 )
             )
         content_text = "\n".join(header + parts)
-        response = client.models.generate_content(model=model, contents=[system_instruction, content_text])
+        if _gen_cfg:
+            response = client.models.generate_content(model=model, contents=[system_instruction, content_text], generation_config=_gen_cfg)
+        else:
+            response = client.models.generate_content(model=model, contents=[system_instruction, content_text])
         return getattr(response, "text", None) or ""
 
     # Try direct multimodal for short videos
@@ -446,6 +553,7 @@ def summarise_gemini(
                     "chunks_used": len(chunks_with_paths),
                     "result_chars": len(result_text or ""),
                     "duration_minutes": total_minutes,
+                    "allocated_tokens": (_gen_cfg.get("max_output_tokens") if isinstance(_gen_cfg, dict) else None),
                 }
             )
         except Exception as e:
@@ -465,16 +573,20 @@ def summarise_gemini(
                 "result_chars": len(result_text or ""),
                 "duration_minutes": total_minutes,
                 "intent": intent,
+                "allocated_tokens": (_gen_cfg.get("max_output_tokens") if isinstance(_gen_cfg, dict) else None),
             }
         )
 
-    # Persist global summary next to chunk artifacts when possible
+    # Persist global summary into runtime/summaries/<job-id>/
     try:
-        if out_dir:
-            gp = Path(out_dir) / "global_summary.gemini.txt"
-            gp.write_text((result_text or "").strip() + "\n", encoding="utf-8")
-            state.artifacts.setdefault(tool_name, {})
-            state.artifacts[tool_name]["global_summary_path"] = str(gp)
+        runtime_dir = getattr(state.config, "runtime_dir", Path("runtime")) if getattr(state, "config", None) else Path("runtime")
+        job_id = Path(manifest_path).parent.name if manifest_path else "session"
+        summary_dir = Path(runtime_dir) / "summaries" / job_id
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        gp = summary_dir / "global_summary.gemini.txt"
+        gp.write_text((result_text or "").strip() + "\n", encoding="utf-8")
+        state.artifacts.setdefault(tool_name, {})
+        state.artifacts[tool_name]["global_summary_path"] = str(gp)
     except Exception:
         pass
 
