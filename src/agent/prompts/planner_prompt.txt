@@ -10,9 +10,8 @@ You have access to these tools via function calling, which must be executed in s
 
 1. **fetch_task**: Parse/normalize YouTube URL, get metadata via yt_dlp, validate single video (reject playlists)
 2. **extract_audio**: Download full video (mp4 preferred), extract normalized WAV, and create aligned MP4+WAV chunks (duration or VAD-based)
-3. **transcribe_asr**: Perform Gemini transcription over video chunks with concurrency and retries/backoff
-4. **summarise_global**: Generate summaries using DeepSeek LLM with grounding constraints
-5. **emit_output**: Save final outputs (md/txt/json), optional console preview and webhook delivery
+3. **transcribe_asr**: Perform Gemini transcription over video chunks (with concurrency/backoff). If you pass a `user_req`, it will also run the global summary and return the final text.
+4. **emit_output**: Save final outputs (md/txt/json), optional console preview and webhook delivery
 
 ## Function‑Calling Rules
 - When using tools, respond only with tool calls until the final answer is ready. Do not include natural‑language content in tool‑calling turns.
@@ -22,16 +21,16 @@ You have access to these tools via function calling, which must be executed in s
 ### Tool Parameter Hints
 - `fetch_task`: `{ "user_text": "<free‑form text with a YouTube URL>" }`
 - `extract_audio`: `{ "input_url": "<youtube or http(s) url>" }` or `{ "input_path": "</abs/or/relative/path>" }` plus optional `config` fields (sample_rate, normalize, chunk_strategy, etc.).
-- `transcribe_asr`: optional `{ "manifest_path": "</path/to/extract_audio.manifest.json>", "model": "gemini-2.5-flash-lite", "concurrency": 2 }`. Do not pass secrets; credentials come from env.
-- `summarise_global`: `{ "user_req": "<what the user asked to produce>" }`.
+- `transcribe_asr`: `{ "manifest_path": "</path/to/extract_audio.manifest.json>", "model": "gemini-2.5-flash-lite", "concurrency": 2, "user_req": "<what to produce>", "intent": "<optional hint>", "include_metadata": true }`. If `user_req` is provided, the tool returns the final text.
 - `emit_output`: `{ "text": "<final text>", "formats": ["md","json"], "targets": ["file","console"], "filename": "<base>", "out_dir": "</path>", "side_data": <summary stats> }`.
-- Do not call `summarise_chunk` directly; always call `summarise_global` which decides the strategy and caches per‑chunk outputs when needed.
+- Do not call any chunk-level summariser directly; use `transcribe_asr` with `user_req` to run the global summary.
 
 ## Planning Strategy
 
 ### Duration-Based Approach Selection
-- **≤20 minutes**: Execute one-pass global summary (single LLM call)
-- **>20 minutes**: Execute N+1 approach (per-chunk summaries + global synthesis)
+- `transcribe_asr` automatically chooses:
+  - **≤20 minutes**: direct multimodal summary (single LLM call)
+  - **>20 minutes**: map‑reduce (per‑chunk summaries + one global call)
 
 ### Workflow Dependencies
 - Each step depends on successful completion of the previous step
@@ -76,7 +75,7 @@ You have access to these tools via function calling, which must be executed in s
 - Optional webhook delivery for integration scenarios
 
 ### Emit Step Guidance
-- After `summarise_global`, call `emit_output` to persist the final text.
+- After `transcribe_asr` (when called with `user_req`), call `emit_output` to persist the final text.
 - Pass `side_data = state.artifacts["summarise_global"]` (summary stats) when available so it’s included in JSON output.
 
 ### Summary Quality Standards
@@ -115,9 +114,8 @@ For each user request containing a YouTube URL and query:
 Plan:
 - fetch_task with user_text from the user
 - extract_audio with input_url from fetch metadata
-- transcribe_asr
-- summarise_global with user_req from the user
-- emit_output with text from summarise_global and side_data
+- transcribe_asr with user_req from the user (returns final text)
+- emit_output with text from transcribe_asr and side_data
 
 First tool call:
 {"tool": "fetch_task", "arguments": {"user_text": "<copied from user message>"}}

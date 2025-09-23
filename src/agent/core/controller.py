@@ -193,8 +193,8 @@ def run_hybrid_session(
                     max_output_tokens=max_output_tokens,
                 )
 
-            # If summarise_global returned text, we can finish here
-            if name == "summarise_global" and isinstance(res, dict) and res.get("ok") and isinstance(res.get("result"), str):
+            # If transcribe_asr was called with user_req and returned text, we can finish here
+            if name == "transcribe_asr" and isinstance(res, dict) and res.get("ok") and isinstance(res.get("result"), str):
                 return res.get("result") or ""
 
             # Otherwise continue the loop to plan next step
