@@ -11,9 +11,11 @@ from agent.errors import ToolError
 from agent.contextengineering import allocate_tokens, to_generation_config
 
 try:
-    from google import genai  
-except Exception:  
-    genai = None  
+    from google import genai
+    from google.genai import types as genai_types  # type: ignore
+except Exception:  # pragma: no cover
+    genai = None
+    genai_types = None  # type: ignore
 
 
 def _load_manifest(path: Path) -> Dict[str, Any]:
@@ -40,7 +42,19 @@ def _find_latest_extract_manifest(runtime_dir: Path) -> Optional[Path]:
     return newest[1]
 
 
-def _poll_file_active(client, name: str, max_wait: float = 300.0) -> bool:
+def _poll_file_active(client, name: str, max_wait: float = 300.0, poll_interval: Optional[float] = None) -> bool:
+    """Poll a Gemini file handle until it becomes ACTIVE or FAILED.
+
+    Respects GEMINI_FILE_POLL_INTERVAL (seconds) if provided; defaults to 2s.
+    """
+    if poll_interval is None:
+        try:
+            poll_interval = float(os.getenv("GEMINI_FILE_POLL_INTERVAL", "2.0") or 2.0)
+        except Exception:
+            poll_interval = 2.0
+    if poll_interval <= 0:
+        poll_interval = 2.0
+
     t0 = time.time()
     while (time.time() - t0) < max_wait:
         try:
@@ -54,7 +68,7 @@ def _poll_file_active(client, name: str, max_wait: float = 300.0) -> bool:
         except Exception:
             # transient error, keep polling
             pass
-        time.sleep(2)
+        time.sleep(poll_interval)
     return False
 
 
@@ -204,13 +218,20 @@ def transcribe_task(
         except Exception as e:
             raise ToolError(f"Gemini file upload failed for chunk {idx}: {e}", tool_name=tool)
 
-        # Poll until ACTIVE
+        # Poll until ACTIVE (early check on immediate state)
         max_wait = float(os.getenv("GEMINI_FILE_WAIT_TIMEOUT", "300"))
-        ok = _poll_file_active(
-            client,
-            name=getattr(myfile, "name", None) or getattr(myfile, "id", None) or str(myfile),
-            max_wait=max_wait,
-        )
+        state0 = getattr(myfile, "state", None)
+        state0_name = getattr(state0, "name", None) or str(state0 or "").upper()
+        if state0_name == "ACTIVE":
+            ok = True
+        elif state0_name == "FAILED":
+            ok = False
+        else:
+            ok = _poll_file_active(
+                client,
+                name=getattr(myfile, "name", None) or getattr(myfile, "id", None) or str(myfile),
+                max_wait=max_wait,
+            )
         if not ok:
             raise ToolError(f"Gemini file did not become ACTIVE within {int(max_wait)}s (chunk {idx}).", tool_name=tool)
 
@@ -468,7 +489,7 @@ def summarise_gemini(
 
     def _direct_multimodal() -> str:
         system_instruction = _load_prompt_text("global_prompt.txt")
-        contents: List[Any] = [system_instruction]
+        contents: List[Any] = []
         meta_block = f"Video metadata:\n{meta_text}\n\n" if meta_text else ""
         req_with_intent = f"{user_req}\n\nIntent: {intent.strip()}" if intent and isinstance(intent, str) and intent.strip() else user_req
         user_prompt_text = (
@@ -499,10 +520,56 @@ def summarise_gemini(
             if mf is not None:
                 contents.append(mf)
 
-        if _gen_cfg:
-            response = client.models.generate_content(model=model, contents=contents, generation_config=_gen_cfg, request_options={"timeout": 600})
+        # Prefer top-level system_instruction and generation_config, fallback to config
+        max_out = 0
+        if isinstance(_gen_cfg, dict):
+            try:
+                max_out = int(_gen_cfg.get("max_output_tokens", 0) or 0)
+            except Exception:
+                max_out = 0
+        if genai_types is not None:
+            gen_cfg_dict = {"max_output_tokens": max_out} if max_out else None
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    system_instruction=(system_instruction if (system_instruction or "").strip() else None),
+                    generation_config=gen_cfg_dict,
+                )
+            except TypeError:
+                cfg_obj = genai_types.GenerateContentConfig(
+                    system_instruction=(system_instruction if (system_instruction or "").strip() else None),
+                )
+                try:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=cfg_obj,
+                        generation_config=gen_cfg_dict,
+                    )
+                except TypeError:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=cfg_obj,
+                    )
         else:
-            response = client.models.generate_content(model=model, contents=contents, request_options={"timeout": 600})
+            cfg_dict: Dict[str, Any] = {}
+            if (system_instruction or "").strip():
+                cfg_dict["system_instruction"] = system_instruction
+            if max_out:
+                cfg_dict["generation_config"] = {"max_output_tokens": max_out}
+            if cfg_dict:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=cfg_dict,
+                )
+            else:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                )
         return getattr(response, "text", None) or ""
 
     def _map_reduce() -> str:
@@ -535,10 +602,56 @@ def summarise_gemini(
                 )
             )
         content_text = "\n".join(header + parts)
-        if _gen_cfg:
-            response = client.models.generate_content(model=model, contents=[system_instruction, content_text], generation_config=_gen_cfg)
+        # Prefer top-level system_instruction and generation_config, fallback to config
+        max_out = 0
+        if isinstance(_gen_cfg, dict):
+            try:
+                max_out = int(_gen_cfg.get("max_output_tokens", 0) or 0)
+            except Exception:
+                max_out = 0
+        if genai_types is not None:
+            gen_cfg_dict = {"max_output_tokens": max_out} if max_out else None
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=[content_text],
+                    system_instruction=(system_instruction if (system_instruction or "").strip() else None),
+                    generation_config=gen_cfg_dict,
+                )
+            except TypeError:
+                cfg_obj = genai_types.GenerateContentConfig(
+                    system_instruction=(system_instruction if (system_instruction or "").strip() else None),
+                )
+                try:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=[content_text],
+                        config=cfg_obj,
+                        generation_config=gen_cfg_dict,
+                    )
+                except TypeError:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=[content_text],
+                        config=cfg_obj,
+                    )
         else:
-            response = client.models.generate_content(model=model, contents=[system_instruction, content_text])
+            cfg_dict: Dict[str, Any] = {}
+            if (system_instruction or "").strip():
+                cfg_dict["system_instruction"] = system_instruction
+            if max_out:
+                cfg_dict["generation_config"] = {"max_output_tokens": max_out}
+            if cfg_dict:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=[content_text],
+                    config=cfg_dict,
+                )
+            else:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=[content_text],
+                )
         return getattr(response, "text", None) or ""
 
     # Try direct multimodal for short videos
@@ -576,6 +689,32 @@ def summarise_gemini(
                 "allocated_tokens": (_gen_cfg.get("max_output_tokens") if isinstance(_gen_cfg, dict) else None),
             }
         )
+
+    # Local fallback if the model returned empty text
+    if not (result_text or "").strip():
+        def _local_fallback() -> str:
+            summaries = [
+                (ch.get("summary") or "").strip()
+                for ch in chunks_with_paths
+                if (ch.get("summary") or "").strip()
+            ]
+            if summaries:
+                return "\n".join(summaries)
+            # As a last resort, include short excerpts to avoid an empty file
+            excerpts = [
+                (ch.get("text") or "")[:400].strip()
+                for ch in chunks_with_paths
+                if (ch.get("text") or "").strip()
+            ]
+            return "\n\n".join(excerpts)
+
+        result_text = _local_fallback()
+        state.artifacts.setdefault(tool_name, {})
+        state.artifacts[tool_name].update({
+            "approach": state.artifacts[tool_name].get("approach", "chunk_by_chunk"),
+            "fallback": "local_merge",
+            "result_chars": len(result_text or ""),
+        })
 
     # Persist global summary into runtime/summaries/<job-id>/
     try:
