@@ -4,6 +4,8 @@ import json
 import time
 from collections import deque
 from typing import Optional
+from pathlib import Path
+import os
 
 from agent.errors import ToolError
 from agent.llm.client import LLMClient
@@ -24,6 +26,99 @@ def _as_tool_content(state, payload, *, limit: int = MAX_TOOL_CONTENT) -> str:
     blob_store = getattr(getattr(state, "cache", None), "store_blob", None)
     key = blob_store(s) if callable(blob_store) else None
     return json.dumps({"truncated": True, "blob_key": key, "preview": s[:limit]}, ensure_ascii=False)
+
+
+def _persist_enabled() -> bool:
+    v = (os.getenv("PERSIST_CHAT_HISTORY", "") or "").strip().lower()
+    return v in {"1", "true", "yes", "on"}
+
+
+def _runtime_dir(state) -> Path:
+    try:
+        rd = getattr(getattr(state, "config", None), "runtime_dir", None)
+        return Path(rd) if rd else Path("runtime")
+    except Exception:
+        return Path("runtime")
+
+
+def _current_job_id(state) -> str:
+    try:
+        arts = getattr(state, "artifacts", {}) or {}
+        ta = arts.get("transcribe_asr", {}) or {}
+        mp = ta.get("manifest_path")
+        if mp:
+            return Path(mp).parent.name
+    except Exception:
+        pass
+    return "session"
+
+
+def _load_chat_history(state) -> list[dict]:
+    """Return stored chat history for the current job id; optionally load from disk.
+
+    Only keeps minimal entries of the form {role, content} with role in {user, assistant}.
+    """
+    try:
+        arts = getattr(state, "artifacts", None)
+        if arts is None:
+            return []
+        arts.setdefault("chat_history", {})
+        jid = _current_job_id(state)
+        if jid in arts["chat_history"] and isinstance(arts["chat_history"][jid], list):
+            return arts["chat_history"][jid]
+        # Optionally load persisted history from disk
+        if _persist_enabled():
+            fp = _runtime_dir(state) / "sessions" / jid / "chat_history.json"
+            if fp.exists():
+                try:
+                    data = json.load(fp.open("r", encoding="utf-8"))
+                    if isinstance(data, list):
+                        norm = []
+                        for m in data:
+                            if not isinstance(m, dict):
+                                continue
+                            role = (m.get("role") or "").strip()
+                            content = m.get("content")
+                            if role in {"user", "assistant"} and isinstance(content, str):
+                                norm.append({"role": role, "content": content})
+                        arts["chat_history"][jid] = norm
+                        return norm
+                except Exception:
+                    pass
+        arts["chat_history"][jid] = []
+        return arts["chat_history"][jid]
+    except Exception:
+        return []
+
+
+def _save_chat_history(state, history: list[dict]) -> None:
+    try:
+        arts = getattr(state, "artifacts", None)
+        if arts is None:
+            return
+        jid = _current_job_id(state)
+        arts.setdefault("chat_history", {})
+        arts["chat_history"][jid] = history
+        if _persist_enabled():
+            base = _runtime_dir(state) / "sessions" / jid
+            base.mkdir(parents=True, exist_ok=True)
+            fp = base / "chat_history.json"
+            with fp.open("w", encoding="utf-8") as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _append_and_save_history(state, user_text: str, assistant_text: str) -> None:
+    hist = _load_chat_history(state)
+    if (user_text or "").strip():
+        hist.append({"role": "user", "content": user_text})
+    if (assistant_text or "").strip():
+        hist.append({"role": "assistant", "content": assistant_text})
+    # Trim to max window
+    if len(hist) > MAX_MSG_WINDOW:
+        del hist[: len(hist) - MAX_MSG_WINDOW]
+    _save_chat_history(state, hist)
 
 
 def _safe_dispatch(state, name: str, args: dict, *, max_attempts: int = 3, backoff: float = 0.5):
@@ -60,6 +155,13 @@ def run_session(
     messages: list[dict] = []
     if (system_instruction or "").strip():
         messages.append({"role": "system", "content": system_instruction})
+    # Seed prior chat history for continuity
+    prior = _load_chat_history(state)
+    if prior:
+        # Only include the most recent window to keep context lean
+        window = prior[-(MAX_MSG_WINDOW - 1):] if len(prior) >= (MAX_MSG_WINDOW - 1) else prior
+        messages.extend(window)
+    # Current user turn
     messages.append({"role": "user", "content": user_text})
 
     step_limit = getattr(state.config, "step_limit", 8) or 8
@@ -128,7 +230,9 @@ def run_session(
             continue
 
         # No tool calls => final answer
-        return msg.get("content") or ""
+        final_text = msg.get("content") or ""
+        _append_and_save_history(state, user_text, final_text)
+        return final_text
 
     raise ToolError("Step limit reached without final answer", tool_name="controller")
 
@@ -169,7 +273,9 @@ def run_hybrid_session(
                 max_output_tokens=max_output_tokens,
             )
         if act == "final":
-            return route.get("content") or ""
+            final_text = route.get("content") or ""
+            _append_and_save_history(state, user_text, final_text)
+            return final_text
         if act == "tool_call":
             name = route.get("tool")
             params = route.get("arguments") or {}
