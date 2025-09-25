@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 280px 1fr 0px; /* right drawer closed by default */
+  height: 100vh;
+}
+
+body { background: radial-gradient(600px circle at 50% 0%, rgba(99,102,241,.10), transparent 40%), radial-gradient(800px circle at 80% 0%, rgba(139,92,246,.08), transparent 40%), radial-gradient(600px circle at 20% 0%, rgba(20,184,166,.06), transparent 40%), #0b0f19; }
+
+.panel { background: theme('colors.panel'); }
+.scroll-smooth { scroll-behavior: smooth; }
+
+/* Landing decorative background */
+.landing-bg {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(500px circle at 50% 30%, rgba(99,102,241,.25), transparent 40%), radial-gradient(700px circle at 75% 10%, rgba(139,92,246,.18), transparent 45%), radial-gradient(600px circle at 25% 5%, rgba(20,184,166,.12), transparent 45%);
+  filter: saturate(120%);
+  pointer-events: none;
+}
