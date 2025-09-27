@@ -54,8 +54,9 @@ export const Chat: React.FC<{ sessionId?: string }> = ({ sessionId }) => {
   }, [sessionId])
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-6">
-      <div className="mx-auto max-w-3xl">
+    <div className="flex-1 overflow-y-auto px-6 py-6 relative">
+      <div className="chat-bg" />
+      <div className="relative z-10 mx-auto max-w-3xl">
         {data?.items?.map((m) => (
           <MessageItem key={m.id} role={m.role as any} content={m.content} />
         ))}

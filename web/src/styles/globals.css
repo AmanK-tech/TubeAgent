@@ -25,3 +25,16 @@ body { background: radial-gradient(600px circle at 50% 0%, rgba(99,102,241,.10),
   filter: saturate(120%);
   pointer-events: none;
 }
+
+/* Chat decorative background */
+.chat-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(600px circle at 15% 20%, rgba(99, 102, 241, 0.12), transparent 45%),
+    radial-gradient(500px circle at 85% 25%, rgba(139, 92, 246, 0.10), transparent 45%),
+    radial-gradient(700px circle at 50% 85%, rgba(16, 185, 129, 0.10), transparent 50%);
+  filter: saturate(115%);
+}
