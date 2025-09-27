@@ -154,9 +154,20 @@ def transcribe_task(
     """
     tool = tool_name or "transcribe_asr"
     runtime_dir = getattr(state.config, "runtime_dir", Path("runtime")) if getattr(state, "config", None) else Path("runtime")
+    # Debug: show resolved locations for manifest discovery
+    try:
+        print("CWD=", Path.cwd().resolve(), "runtime_dir=", Path(runtime_dir).resolve())
+    except Exception:
+        pass
+    
+    # ... inside transcribe_task, before the manifest search logic ...
+    print("Pausing for 1 second to wait for manifest file...")
+    time.sleep(1)
 
-    # Resolve manifest
+    # Now, continue with the manifest discovery logic
     manifest_p: Optional[Path] = Path(manifest_path).resolve() if manifest_path else None
+    
+    # Resolve manifest
     if not manifest_p and isinstance(state.artifacts.get("extract_audio"), dict):
         mp = state.artifacts.get("extract_audio", {}).get("manifest_path")
         if mp:

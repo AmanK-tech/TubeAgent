@@ -121,6 +121,62 @@ def _append_and_save_history(state, user_text: str, assistant_text: str) -> None
     _save_chat_history(state, hist)
 
 
+def _try_read_text_file(path: str) -> str | None:
+    try:
+        p = Path(path)
+        if p.exists() and p.is_file():
+            return p.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return None
+
+
+def _final_text_from_emit(state, tool_result: dict) -> str:
+    """Derive a terminal assistant message after a successful emit_output.
+
+    Preference order:
+      1) summarise_global.global_summary_path (if present)
+      2) result.primary_path (md/txt) contents
+      3) result.outputs[md|txt]
+      4) concise confirmation with locations
+    """
+    # 1) Global summary persisted by summarise_gemini
+    try:
+        sg = (getattr(state, "artifacts", {}) or {}).get("summarise_global", {}) or {}
+        gp = sg.get("global_summary_path")
+        if isinstance(gp, str):
+            t = _try_read_text_file(gp)
+            if (t or "").strip():
+                return t
+    except Exception:
+        pass
+
+    res = tool_result.get("result") if isinstance(tool_result, dict) else None
+    if isinstance(res, dict):
+        # 2) Primary path
+        primary = res.get("primary_path")
+        if isinstance(primary, str):
+            t = _try_read_text_file(primary)
+            if (t or "").strip():
+                return t
+        # 3) Outputs map
+        outputs = res.get("outputs") or {}
+        if isinstance(outputs, dict):
+            for key in ("md", "txt"):
+                p = outputs.get(key)
+                if isinstance(p, str):
+                    t = _try_read_text_file(p)
+                    if (t or "").strip():
+                        return t
+        # 4) Confirmation fallback
+        base_dir = res.get("dir")
+        if isinstance(base_dir, str) or isinstance(primary, str):
+            loc = f" in {base_dir}" if isinstance(base_dir, str) else ""
+            prim = f" Primary: {primary}" if isinstance(primary, str) else ""
+            return f"Saved deliverables{loc}.{prim}"
+    return "Saved deliverables."
+
+
 def _safe_dispatch(state, name: str, args: dict, *, max_attempts: int = 3, backoff: float = 0.5):
     """Retry flaky tools briefly; on final failure, return a structured error object."""
     attempt = 0
@@ -199,6 +255,7 @@ def run_session(
 
         tool_calls = msg.get("tool_calls") or []
         if tool_calls:
+            emit_final_text: str | None = None
             for tc in tool_calls:
                 fn = (tc or {}).get("function", {})
                 name = fn.get("name") or ""
@@ -215,6 +272,23 @@ def run_session(
 
                 # Execute tool (with retries) and cap payload size back to LLM
                 tool_result = _safe_dispatch(state, name, args)
+                # Bubble tool failures immediately instead of looping to step limit
+                try:
+                    if not (tool_result or {}).get("ok", False):
+                        err = (tool_result or {}).get("error")
+                        msg_err = (err or {}).get("message") if isinstance(err, dict) else (str(err) if err is not None else "Tool failed")
+                        raise ToolError(msg_err or f"{name} failed", tool_name=name)
+                except ToolError:
+                    raise
+                except Exception:
+                    pass
+
+                # If emit_output succeeded, treat as terminal now
+                try:
+                    if name == "emit_output" and (tool_result or {}).get("ok", False):
+                        emit_final_text = _final_text_from_emit(state, tool_result)
+                except Exception:
+                    emit_final_text = emit_final_text or "Saved deliverables."
                 messages.append(
                     {
                         "role": "tool",
@@ -226,6 +300,11 @@ def run_session(
             # Trim message window to protect context budget
             if len(messages) > MAX_MSG_WINDOW:
                 messages = [messages[0]] + messages[-(MAX_MSG_WINDOW - 1):]
+            # If emit_output completed, finish now with a helpful message/content
+            if emit_final_text:
+                final_text = emit_final_text
+                _append_and_save_history(state, user_text, final_text)
+                return final_text
             # Ask again with tool results appended
             continue
 
@@ -299,9 +378,27 @@ def run_hybrid_session(
                     max_output_tokens=max_output_tokens,
                 )
 
+            # Bubble tool failures immediately
+            try:
+                if not (res or {}).get("ok", False):
+                    err = (res or {}).get("error")
+                    msg_err = (err or {}).get("message") if isinstance(err, dict) else (str(err) if err is not None else "Tool failed")
+                    raise ToolError(msg_err or f"{name} failed", tool_name=name)
+            except ToolError:
+                raise
+            except Exception:
+                pass
+
             # If transcribe_asr was called with user_req and returned text, we can finish here
             if name == "transcribe_asr" and isinstance(res, dict) and res.get("ok") and isinstance(res.get("result"), str):
                 return res.get("result") or ""
+
+            # If emit_output completed successfully, finalize with saved content or a confirmation
+            if name == "emit_output" and isinstance(res, dict) and res.get("ok"):
+                try:
+                    return _final_text_from_emit(state, res)
+                except Exception:
+                    return "Saved deliverables."
 
             # Otherwise continue the loop to plan next step
             continue

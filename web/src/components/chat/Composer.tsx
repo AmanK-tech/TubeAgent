@@ -7,7 +7,8 @@ export const Composer: React.FC<{ sessionId?: string }> = ({ sessionId }) => {
 
   const onSend = async () => {
     if (!sessionId) return
-    const payload = { role: 'user', content: text }
+    // Send user_req alongside content so backend can directly route
+    const payload = { role: 'user' as const, content: text, user_req: text }
     setText('')
     await sendMessage(sessionId, payload)
   }
