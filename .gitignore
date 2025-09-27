@@ -236,3 +236,5 @@ runtime/**
 *.mp4
 *.mkv
 *.webm
+
+/cleanup_gemini_files.py

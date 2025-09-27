@@ -24,21 +24,36 @@ def _load_manifest(path: Path) -> Dict[str, Any]:
 
 
 def _find_latest_extract_manifest(runtime_dir: Path) -> Optional[Path]:
-    base = runtime_dir / "cache" / "extract"
+    """Find the most recent extract manifest file."""
+    base = Path(runtime_dir) / "cache" / "extract"
+    print(f"DEBUG: Looking for manifests in: {base.resolve()}")
+    
     if not base.exists():
+        print(f"DEBUG: Extract cache directory does not exist: {base}")
         return None
+        
     newest: tuple[float, Optional[Path]] = (0.0, None)
+    found_dirs = []
+    
     for child in base.iterdir():
         if not child.is_dir():
             continue
+        found_dirs.append(str(child))
         mp = child / "extract_audio.manifest.json"
+        print(f"DEBUG: Checking manifest path: {mp.resolve()}")
+        
         if mp.exists():
             try:
                 mt = mp.stat().st_mtime
-            except Exception:
+                print(f"DEBUG: Found manifest with mtime {mt}: {mp}")
+                if mt >= newest[0]:
+                    newest = (mt, mp)
+            except Exception as e:
+                print(f"DEBUG: Error getting mtime for {mp}: {e}")
                 mt = 0.0
-            if mt >= newest[0]:
-                newest = (mt, mp)
+    
+    print(f"DEBUG: Found directories in extract cache: {found_dirs}")
+    print(f"DEBUG: Selected manifest: {newest[1]}")
     return newest[1]
 
 
@@ -154,28 +169,70 @@ def transcribe_task(
     """
     tool = tool_name or "transcribe_asr"
     runtime_dir = getattr(state.config, "runtime_dir", Path("runtime")) if getattr(state, "config", None) else Path("runtime")
+    runtime_dir = Path(runtime_dir)  # Ensure it's a Path object
+    
     # Debug: show resolved locations for manifest discovery
-    try:
-        print("CWD=", Path.cwd().resolve(), "runtime_dir=", Path(runtime_dir).resolve())
-    except Exception:
-        pass
+    print(f"DEBUG: CWD = {Path.cwd().resolve()}")
+    print(f"DEBUG: runtime_dir = {runtime_dir.resolve()}")
     
-    # ... inside transcribe_task, before the manifest search logic ...
-    print("Pausing for 1 second to wait for manifest file...")
-    time.sleep(1)
-
-    # Now, continue with the manifest discovery logic
-    manifest_p: Optional[Path] = Path(manifest_path).resolve() if manifest_path else None
+    # Resolve manifest with improved logic
+    manifest_p: Optional[Path] = None
     
-    # Resolve manifest
+    # 1. First check if explicit manifest_path was provided
+    if manifest_path:
+        manifest_p = Path(manifest_path).resolve()
+        print(f"DEBUG: Using explicit manifest_path: {manifest_p}")
+        if not manifest_p.exists():
+            print(f"DEBUG: Explicit manifest path does not exist: {manifest_p}")
+            manifest_p = None
+    
+    # 2. Check state artifacts for manifest path
     if not manifest_p and isinstance(state.artifacts.get("extract_audio"), dict):
         mp = state.artifacts.get("extract_audio", {}).get("manifest_path")
         if mp:
             manifest_p = Path(mp).resolve()
+            print(f"DEBUG: Using manifest from state artifacts: {manifest_p}")
+            if not manifest_p.exists():
+                print(f"DEBUG: Manifest from artifacts does not exist: {manifest_p}")
+                manifest_p = None
+    
+    # 3. Search for latest manifest if still not found
     if not manifest_p:
+        print("DEBUG: Searching for latest manifest...")
+        # Add a small delay to ensure file system operations are complete
+        time.sleep(1)
         manifest_p = _find_latest_extract_manifest(runtime_dir)
+        if manifest_p:
+            print(f"DEBUG: Found latest manifest: {manifest_p}")
+        else:
+            print("DEBUG: No manifest found in search")
+    
+    # 4. Final check and error handling
     if not manifest_p or not manifest_p.exists():
-        raise ToolError("No extract manifest found. Run extract_audio first.", tool_name=tool)
+        # More detailed error message
+        extract_base = runtime_dir / "cache" / "extract"
+        if extract_base.exists():
+            dirs = [d.name for d in extract_base.iterdir() if d.is_dir()]
+            manifests = []
+            for d in extract_base.iterdir():
+                if d.is_dir():
+                    mp = d / "extract_audio.manifest.json"
+                    if mp.exists():
+                        manifests.append(str(mp))
+            
+            error_msg = (
+                f"No extract manifest found. Run extract_audio first.\n"
+                f"Searched in: {extract_base.resolve()}\n"
+                f"Found directories: {dirs}\n"
+                f"Found manifests: {manifests}\n"
+                f"State artifacts keys: {list(state.artifacts.keys())}"
+            )
+        else:
+            error_msg = f"No extract manifest found. Extract cache directory does not exist: {extract_base.resolve()}"
+        
+        raise ToolError(error_msg, tool_name=tool)
+
+    print(f"DEBUG: Using manifest file: {manifest_p}")
 
     manifest = _load_manifest(manifest_p)
     res = manifest.get("result", {})

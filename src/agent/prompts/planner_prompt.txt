@@ -21,7 +21,7 @@ You have access to these tools via function calling, which must be executed in s
 ### Tool Parameter Hints
 - `fetch_task`: `{ "user_text": "<free‑form text with a YouTube URL>" }`
 - `extract_audio`: `{ "input_url": "<youtube or http(s) url>" }` or `{ "input_path": "</abs/or/relative/path>" }` plus optional `config` fields (sample_rate, normalize, chunk_strategy, etc.).
-- `transcribe_asr`: `{ "manifest_path": "</path/to/extract_audio.manifest.json>", "model": "gemini-2.5-flash-lite", "concurrency": 2, "user_req": "<what to produce>", "intent": "<optional hint>", "include_metadata": true }`. If `user_req` is provided, the tool returns the final text.
+- `transcribe_asr`: `{ "manifest_path": "</path/to/extract_audio.manifest.json>", "model": "gemini-2.5-flash", "concurrency": 2, "user_req": "<what to produce>", "intent": "<optional hint>", "include_metadata": true }`. If `user_req` is provided, the tool returns the final text.
 - `emit_output`: `{ "text": "<final text>", "formats": ["md","json"], "targets": ["file","console"], "filename": "<base>", "out_dir": "</path>", "side_data": <summary stats> }`.
 - Do not call any chunk-level summariser directly; use `transcribe_asr` with `user_req` to run the global summary.
 
