@@ -40,7 +40,7 @@ async def post_message(session_id: str, payload: PostMessageRequest) -> PostMess
         try:
             # If user_req provided, use it to drive the agent (planner will map to transcribe_asr with user_req)
             drive_text = payload.user_req or payload.content
-            async for chunk in agent.respond_stream(drive_text):
+            async for chunk in agent.respond_stream(session_id, drive_text):
                 await ws_manager.emit_token(session_id, chunk)
             # Once complete, aggregate and store final assistant message from chunks
             # The manager buffers per session to assemble final text

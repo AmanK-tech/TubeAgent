@@ -22,6 +22,9 @@ class Session:
     created_at: float
     updated_at: float
     messages: List[Message] = field(default_factory=list)
+    # Persist minimal agent context so follow-ups work without re-supplying the URL
+    # Structure: { "video": {...}, "artifacts": {...}, "transcript_path": str | None }
+    agent_ctx: dict = field(default_factory=dict)
 
 
 class MemoryStore:
@@ -59,6 +62,16 @@ class MemoryStore:
             sess.updated_at = m.created_at
             return m
 
+    # --- Agent context helpers -------------------------------------------------
+    def set_agent_context(self, sid: str, ctx: dict) -> None:
+        with self._lock:
+            if sid in self.sessions:
+                self.sessions[sid].agent_ctx = ctx or {}
+
+    def get_agent_context(self, sid: str) -> dict:
+        with self._lock:
+            s = self.sessions.get(sid)
+            return dict(getattr(s, "agent_ctx", {}) or {}) if s else {}
+
 
 store = MemoryStore()
-

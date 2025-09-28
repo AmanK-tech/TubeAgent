@@ -4,8 +4,10 @@ from typing import AsyncGenerator, Optional
 import asyncio
 
 from agent.core.config import load_config
-from agent.core.state import AgentState
+from agent.core.state import AgentState, VideoMeta
 from agent.core.controller import run_hybrid_session
+from ..state import store
+from pathlib import Path
 
 
 class AgentService:
@@ -18,19 +20,49 @@ class AgentService:
     def __init__(self, profile: str = "default") -> None:
         self.profile = profile
 
-    def _new_state(self) -> AgentState:
+    def _new_state(self, session_id: str | None = None) -> AgentState:
         cfg = load_config(self.profile)
-        return AgentState(config=cfg)
+        state = AgentState(config=cfg)
+        # Hydrate from prior session context so follow-ups work without pasting URL again
+        if session_id:
+            ctx = store.get_agent_context(session_id)
+            try:
+                vid = ctx.get("video") if isinstance(ctx, dict) else None
+                if isinstance(vid, dict) and vid.get("video_id"):
+                    state.video = VideoMeta(
+                        video_id=str(vid.get("video_id")),
+                        title=str(vid.get("title", "")),
+                        duration_s=int(vid.get("duration_s") or 0),
+                        source_url=str(vid.get("source_url", "")),
+                    )
+            except Exception:
+                pass
+            try:
+                arts = ctx.get("artifacts") if isinstance(ctx, dict) else None
+                if isinstance(arts, dict):
+                    state.artifacts = arts
+                # Load combined transcript if present for planner fast-paths
+                ta = (arts or {}).get("transcribe_asr", {}) if isinstance(arts, dict) else {}
+                ctp = ta.get("combined_transcript_path") if isinstance(ta, dict) else None
+                if ctp and Path(ctp).exists():
+                    try:
+                        state.transcript = Path(ctp).read_text(encoding="utf-8").strip()
+                    except Exception:
+                        state.transcript = None
+            except Exception:
+                pass
+        return state
 
     async def respond_stream(
         self,
+        session_id: str,
         user_text: str,
         *,
         system_instruction: Optional[str] = None,
         chunk_size: int = 20,
         delay_s: float = 0.0,
     ) -> AsyncGenerator[str, None]:
-        state = self._new_state()
+        state = self._new_state(session_id)
         # Run synchronously in thread to avoid blocking loop
         loop = asyncio.get_running_loop()
         final_text: str = await loop.run_in_executor(
@@ -41,6 +73,22 @@ class AgentService:
                 system_instruction=system_instruction,
             ),
         )
+        # Persist minimal context for follow-ups
+        try:
+            ctx_out = {}
+            if getattr(state, "video", None):
+                v = state.video
+                ctx_out["video"] = {
+                    "video_id": v.video_id,
+                    "title": v.title,
+                    "duration_s": v.duration_s,
+                    "source_url": v.source_url,
+                }
+            if getattr(state, "artifacts", None):
+                ctx_out["artifacts"] = state.artifacts
+            store.set_agent_context(session_id, ctx_out)
+        except Exception:
+            pass
         # Ensure there is a prominent heading at the top of the output so the UI
         # can render it in bold/highlighted style. If a heading is already present
         # (Markdown #/## or **bold** on the first line), leave as-is.
