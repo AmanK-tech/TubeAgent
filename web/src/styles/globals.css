@@ -12,7 +12,9 @@ html, body, #root {
   height: 100vh;
 }
 
-body { background: radial-gradient(600px circle at 50% 0%, rgba(99,102,241,.10), transparent 40%), radial-gradient(800px circle at 80% 0%, rgba(139,92,246,.08), transparent 40%), radial-gradient(600px circle at 20% 0%, rgba(20,184,166,.06), transparent 40%), #0b0f19; }
+/* Use a solid base color to avoid visible seams when layered
+   gradients (body + fixed chat-bg) intersect during scroll. */
+body { background: #0b0f19; }
 
 .panel { background: theme('colors.panel'); }
 .scroll-smooth { scroll-behavior: smooth; }
@@ -21,20 +23,22 @@ body { background: radial-gradient(600px circle at 50% 0%, rgba(99,102,241,.10),
 .landing-bg {
   position: absolute;
   inset: 0;
-  background: radial-gradient(500px circle at 50% 30%, rgba(99,102,241,.25), transparent 40%), radial-gradient(700px circle at 75% 10%, rgba(139,92,246,.18), transparent 45%), radial-gradient(600px circle at 25% 5%, rgba(20,184,166,.12), transparent 45%);
-  filter: saturate(120%);
+  background: radial-gradient(520px circle at 50% 30%, rgba(99,102,241,.30), transparent 40%), radial-gradient(720px circle at 75% 10%, rgba(139,92,246,.22), transparent 45%), radial-gradient(640px circle at 25% 5%, rgba(20,184,166,.16), transparent 45%);
+  filter: saturate(135%);
   pointer-events: none;
 }
 
 /* Chat decorative background */
 .chat-bg {
-  position: absolute;
+  position: fixed; /* cover viewport; avoid scroll seams */
   inset: 0;
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(600px circle at 15% 20%, rgba(99, 102, 241, 0.12), transparent 45%),
-    radial-gradient(500px circle at 85% 25%, rgba(139, 92, 246, 0.10), transparent 45%),
-    radial-gradient(700px circle at 50% 85%, rgba(16, 185, 129, 0.10), transparent 50%);
-  filter: saturate(115%);
+    /* soft top glow and gentle bottom lift for better contrast */
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.00) 40%, rgba(0, 0, 0, 0.10) 100%),
+    radial-gradient(800px circle at 18% 22%, rgba(99, 102, 241, 0.20), transparent 46%),
+    radial-gradient(640px circle at 86% 24%, rgba(139, 92, 246, 0.18), transparent 48%),
+    radial-gradient(900px circle at 50% 88%, rgba(16, 185, 129, 0.15), transparent 56%);
+  filter: saturate(130%);
 }

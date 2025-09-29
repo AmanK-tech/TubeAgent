@@ -5,7 +5,7 @@ import { MessageItem } from './MessageItem'
 
 type WSMessage = { type: 'connected' | 'token' | 'message_complete' | 'error' | string; text?: string; message?: string }
 
-export const Chat: React.FC<{ sessionId?: string }> = ({ sessionId }) => {
+export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void; onError?: (msg?: string) => void }> = ({ sessionId, onMessageComplete, onError }) => {
   const { data, refetch } = useQuery({
     queryKey: ['messages', sessionId],
     queryFn: () => listMessages(sessionId!),
@@ -25,7 +25,10 @@ export const Chat: React.FC<{ sessionId?: string }> = ({ sessionId }) => {
     const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/chat/${sessionId}`)
 
     ws.onopen = () => setWsError('')
-    ws.onerror = () => setWsError('WebSocket connection error')
+    ws.onerror = () => {
+      setWsError('WebSocket connection error')
+      onError?.('WebSocket connection error')
+    }
     ws.onclose = () => {
       // only show a soft hint; auto-reconnect handled by remount
       // keep last known streamText as-is
@@ -40,9 +43,11 @@ export const Chat: React.FC<{ sessionId?: string }> = ({ sessionId }) => {
           setStreamText('')
           refetch()
           setWsError('')
+          onMessageComplete?.()
         } else if (msg.type === 'error') {
           setStreamText('')
           setWsError(msg.message || 'An error occurred while generating the response.')
+          onError?.(msg.message)
           // refresh to at least show the user message that was posted
           refetch()
         }
@@ -55,8 +60,7 @@ export const Chat: React.FC<{ sessionId?: string }> = ({ sessionId }) => {
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6 relative">
-      <div className="chat-bg" />
-      <div className="relative z-10 mx-auto max-w-3xl">
+      <div className="relative z-10 mx-auto max-w-3xl text-[17px] sm:text-[18px] leading-7">
         {data?.items?.map((m) => (
           <MessageItem key={m.id} role={m.role as any} content={m.content} />
         ))}
