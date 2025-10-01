@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, List
+from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 
 try:
@@ -12,6 +13,11 @@ except Exception:  # pragma: no cover
 
 from agent.errors import PlanningError
 from agent.llm.client import LLMClient
+try:
+    # Use the robust URL normalizer from fetch tool when available
+    from agent.tools.fetch import _extract_and_normalize_youtube_url as _normalize_yt_url  # type: ignore
+except Exception:  # pragma: no cover
+    _normalize_yt_url = None  # type: ignore
 
 
 def _load_planner_system() -> str:
@@ -312,6 +318,44 @@ class Planner:
         intent = _classify_intent_heuristic(user_text, history=history)
         _record_query(state, user_text, intent)
         _log(state, "intent", {"intent": intent, "user_text": user_text})
+
+        # If the message includes a YouTube URL, force a fresh fetch regardless of existing transcript.
+        # This ensures switching videos mid-session always re-seeds state.video/artifacts.
+        def _extract_id(u: str | None) -> Optional[str]:
+            if not u:
+                return None
+            try:
+                p = urlparse(u)
+                host = (p.hostname or "").lower()
+                if host == "youtu.be":
+                    vid = (p.path or "/").lstrip("/")
+                    return vid or None
+                if host.endswith("youtube.com") and p.path == "/watch":
+                    qs = parse_qs(p.query or "")
+                    return (qs.get("v", [None])[0])
+                # embed/shorts/live variants handled by normalizer already
+            except Exception:
+                return None
+            return None
+
+        new_url = None
+        try:
+            if _normalize_yt_url is not None:
+                new_url = _normalize_yt_url(user_text)  # type: ignore
+        except Exception:
+            new_url = None
+
+        if new_url:
+            old_id = None
+            try:
+                vid = getattr(state, "video", None)
+                if vid and getattr(vid, "video_id", None):
+                    old_id = str(getattr(vid, "video_id"))
+            except Exception:
+                old_id = None
+            new_id = _extract_id(new_url)
+            if (new_id or "") != (old_id or ""):
+                return {"action": "tool_call", "tool": "fetch_task", "arguments": {"user_text": user_text}}
 
         # Identity fast-path: answer "who is the youtuber/channel" directly from metadata if available
         if intent == "question" and _is_identity_query(user_text):
