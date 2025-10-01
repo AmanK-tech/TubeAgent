@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Chat } from '../components/chat/Chat'
 import { Landing } from '../components/chat/Landing'
 import { listSessions, createSession, closeSession } from '../api/sessions'
@@ -6,6 +7,7 @@ import { listMessages, sendMessage } from '../api/messages'
 import ExpandableInput from '../components/ui/ExpandableInput'
 
 export const ChatPage: React.FC = () => {
+  const qc = useQueryClient()
   const [active, setActive] = useState<string | undefined>()
   const [showLanding, setShowLanding] = useState<boolean>(true)
   const [inFlight, setInFlight] = useState<boolean>(false)
@@ -71,6 +73,7 @@ export const ChatPage: React.FC = () => {
             sessionId={active}
             onMessageComplete={() => setInFlight(false)}
             onError={() => setInFlight(false)}
+            loading={inFlight}
           />
         </div>
       </div>
@@ -90,6 +93,8 @@ export const ChatPage: React.FC = () => {
               try {
                 setInFlight(true)
                 await sendMessage(active, { role: 'user', content: t, user_req: t })
+                // Immediately refresh messages so the just-sent user message appears
+                await qc.invalidateQueries({ queryKey: ['messages', active] })
               } catch (e) {
                 setInFlight(false)
                 throw e

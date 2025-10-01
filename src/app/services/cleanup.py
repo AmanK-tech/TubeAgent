@@ -161,3 +161,35 @@ def cleanup_session_artifacts(agent_ctx: dict) -> None:
     except Exception:
         pass
     delete_gemini_uploads_by_names(names)
+
+
+def clean_extract_jobs_and_downloads() -> None:
+    """Remove all per-job folders under cache/extract and .webm files in downloads.
+
+    - Keeps the extract folder itself intact; only deletes its immediate subfolders.
+    - Deletes only *.webm files from runtime/downloads (preserves other formats).
+    - Best-effort; silently ignores errors.
+    """
+    try:
+        extract_root = RUNTIME_PATH / "cache" / "extract"
+        if extract_root.exists() and extract_root.is_dir():
+            for child in list(extract_root.iterdir()):
+                try:
+                    if child.is_dir() and _is_under_runtime(child):
+                        shutil.rmtree(child, ignore_errors=True)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    try:
+        downloads = RUNTIME_PATH / "downloads"
+        if downloads.exists() and downloads.is_dir():
+            for f in list(downloads.glob("*.webm")):
+                try:
+                    if f.is_file() and _is_under_runtime(f):
+                        f.unlink(missing_ok=True)
+                except Exception:
+                    continue
+    except Exception:
+        pass

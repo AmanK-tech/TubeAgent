@@ -9,7 +9,7 @@ from ...schemas.session import (
     ListSessionsResponse,
     Session as SessionSchema,
 )
-from ...services.cleanup import safe_purge_runtime, delete_gemini_uploads, cleanup_session_artifacts
+from ...services.cleanup import safe_purge_runtime, delete_gemini_uploads, cleanup_session_artifacts, clean_extract_jobs_and_downloads
 from ...sockets.manager import ws_manager
 
 
@@ -51,6 +51,8 @@ async def delete_session(session_id: str, bg: BackgroundTasks) -> dict:
     bg.add_task(safe_purge_runtime)
     # 3) Legacy hook (no-op here but kept for compatibility)
     bg.add_task(delete_gemini_uploads, [], None)
+    # 4) Always clear extract job folders and webm downloads (keep roots)
+    bg.add_task(clean_extract_jobs_and_downloads)
     return {"ok": True}
 
 
@@ -76,6 +78,10 @@ async def close_session(session_id: str, bg: BackgroundTasks) -> dict:
     store.delete_session(session_id)
     try:
         bg.add_task(cleanup_session_artifacts, dict(getattr(s, "agent_ctx", {}) or {}))
+    except Exception:
+        pass
+    try:
+        bg.add_task(clean_extract_jobs_and_downloads)
     except Exception:
         pass
     return {"ok": True}

@@ -5,7 +5,7 @@ import { MessageItem } from './MessageItem'
 
 type WSMessage = { type: 'connected' | 'token' | 'message_complete' | 'error' | string; text?: string; message?: string }
 
-export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void; onError?: (msg?: string) => void }> = ({ sessionId, onMessageComplete, onError }) => {
+export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void; onError?: (msg?: string) => void; loading?: boolean }> = ({ sessionId, onMessageComplete, onError, loading }) => {
   const { data, refetch } = useQuery({
     queryKey: ['messages', sessionId],
     queryFn: () => listMessages(sessionId!),
@@ -64,6 +64,16 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
         {data?.items?.map((m) => (
           <MessageItem key={m.id} role={m.role as any} content={m.content} />
         ))}
+        {/* Typing / generating indicator: shown while waiting for assistant */}
+        {(loading && !streamText) && (
+          <div className="my-2 pl-1">
+            <div className="flex items-center gap-1 text-neutral-400">
+              <span className="w-2 h-2 rounded-full bg-neutral-400 animate-pulse" />
+              <span className="w-2 h-2 rounded-full bg-neutral-400 animate-pulse [animation-delay:150ms]" />
+              <span className="w-2 h-2 rounded-full bg-neutral-400 animate-pulse [animation-delay:300ms]" />
+            </div>
+          </div>
+        )}
         {wsError && <MessageItem role="system" content={`Error: ${wsError}`} />}
         {streamText && <MessageItem role="assistant" content={streamText} />}
         <div ref={bottomRef} />
