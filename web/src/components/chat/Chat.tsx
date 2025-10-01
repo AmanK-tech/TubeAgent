@@ -60,7 +60,7 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6 relative">
-      <div className="relative z-10 mx-auto max-w-3xl text-[17px] sm:text-[18px] leading-7">
+      <div className="relative z-10 mx-auto max-w-3xl text-[16px] sm:text-[17px] leading-[1.75]">
         {data?.items?.map((m) => (
           <MessageItem key={m.id} role={m.role as any} content={m.content} />
         ))}
