@@ -3,10 +3,35 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
+
+try:
+    from google import genai  # type: ignore
+except Exception:  # pragma: no cover
+    genai = None  # type: ignore
 
 
-RUNTIME_PATH = Path("/Users/khatri/TubeAgent/runtime")
+def _resolve_runtime_path() -> Path:
+    """Resolve the runtime directory for deployments.
+
+    Priority:
+      1) Env var RUNTIME_DIR
+      2) Env var TUBEAGENT_RUNTIME_DIR
+      3) repo-relative ./runtime (default used across the codebase)
+    """
+    env = os.getenv("RUNTIME_DIR") or os.getenv("TUBEAGENT_RUNTIME_DIR")
+    if env:
+        p = Path(env).expanduser()
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        return p
+    # default to repo runtime folder
+    return Path(__file__).resolve().parents[3] / "runtime"
+
+
+RUNTIME_PATH = _resolve_runtime_path()
 
 
 def safe_purge_runtime(path: Path = RUNTIME_PATH) -> None:
@@ -46,3 +71,93 @@ def delete_gemini_uploads(files: Iterable[object], client: object | None) -> Non
         except Exception:
             continue
 
+
+# ---------------------- Session-targeted cleanup ----------------------------
+
+def _is_under_runtime(p: Path) -> bool:
+    try:
+        return RUNTIME_PATH.resolve() in p.resolve().parents or p.resolve() == RUNTIME_PATH.resolve()
+    except Exception:
+        return False
+
+
+def _safe_rmtree(p: Optional[Path]) -> None:
+    try:
+        if not p:
+            return
+        if p.exists() and _is_under_runtime(p):
+            shutil.rmtree(p, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def delete_gemini_uploads_by_names(names: Iterable[str]) -> None:
+    """Delete Gemini files by name/id. Best effort; requires GOOGLE_API_KEY.
+
+    Accepts iterable of strings like 'files/abc123' or raw ids. Ignores errors.
+    """
+    if not names:
+        return
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key or genai is None:
+        return
+    try:
+        client = genai.Client(api_key=api_key)  # type: ignore
+    except Exception:
+        return
+    seen = set()
+    for n in names:
+        try:
+            name = str(n or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            # client accepts either 'files/..' or id; pass as-is
+            client.files.delete(name=name)  # type: ignore[attr-defined]
+        except Exception:
+            continue
+
+
+def cleanup_session_artifacts(agent_ctx: dict) -> None:
+    """Best‑effort cleanup of runtime caches, summaries and Gemini files for one session.
+
+    - Deletes extract folder (parent of manifest_path) under runtime/cache/extract/
+    - Deletes summaries/<job-id>/ where job-id is the manifest parent folder name
+    - Deletes uploaded Gemini files referenced in transcribe_asr artifacts
+    """
+    try:
+        arts = (agent_ctx or {}).get("artifacts", {}) if isinstance(agent_ctx, dict) else {}
+        ta = arts.get("transcribe_asr", {}) if isinstance(arts, dict) else {}
+        manifest = ta.get("manifest_path") if isinstance(ta, dict) else None
+        manifest_p = Path(manifest).resolve() if manifest else None
+    except Exception:
+        manifest_p = None
+
+    # Compute job id from manifest parent
+    job_id = None
+    extract_dir = None
+    if manifest_p and manifest_p.exists():
+        try:
+            extract_dir = manifest_p.parent
+            job_id = extract_dir.name
+        except Exception:
+            job_id = None
+
+    # Delete extract cache dir
+    _safe_rmtree(extract_dir)
+
+    # Delete summaries/<job-id>
+    if job_id:
+        _safe_rmtree(RUNTIME_PATH / "summaries" / job_id)
+
+    # Delete Gemini uploaded files
+    names: list[str] = []
+    try:
+        chunks = ta.get("chunks", []) if isinstance(ta, dict) else []
+        for ch in chunks or []:
+            n = (ch or {}).get("gemini_file_name")
+            if isinstance(n, str) and n.strip():
+                names.append(n.strip())
+    except Exception:
+        pass
+    delete_gemini_uploads_by_names(names)

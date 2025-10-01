@@ -506,6 +506,23 @@ def summarise_gemini(
     except Exception:
         pass
 
+    # Speed up follow-ups: prefer transcript-only path when prior interaction exists.
+    # Controlled by FAST_FOLLOWUP_TEXT_ONLY (default on). This avoids attaching media files
+    # and relies on cached transcript/summaries for much faster answers.
+    try:
+        fast_env = (os.getenv("FAST_FOLLOWUP_TEXT_ONLY", "1") or "1").strip().lower()
+        fast_on = fast_env in {"1", "true", "yes", "on"}
+    except Exception:
+        fast_on = True
+    try:
+        prior_history = ((getattr(state, "artifacts", {}) or {}).get("planner", {}) or {}).get("history", [])
+        has_prior_turns = bool(prior_history)
+    except Exception:
+        has_prior_turns = False
+    if fast_on and has_prior_turns:
+        # Force map-reduce/text path by making the direct threshold unreachable
+        minutes_limit = -1.0
+
     # Prepare optional metadata string
     meta_lines: List[str] = []
     if include_metadata:

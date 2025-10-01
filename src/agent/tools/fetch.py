@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 from urllib.parse import urlparse, parse_qs
+from pathlib import Path
+import os
 
 import yt_dlp
 
@@ -140,6 +142,31 @@ def fetch_task(state, fetch_name: str, user_text: str):
         )
 
     # 2) Single yt-dlp metadata fetch (no download)
+    def _cookies_opts_from_env() -> dict:
+        """Return yt-dlp cookie options from env without exposing secrets.
+
+        Supported env vars:
+          - YT_COOKIES_FILE: path to exported cookies.txt (mounted secret)
+          - YT_COOKIES_FROM_BROWSER: browser name (chrome|brave|edge|firefox|safari)
+          - YT_COOKIES_BROWSER_PROFILE: optional browser profile name (e.g., Default)
+        """
+        try:
+            cookiefile = os.getenv("YT_COOKIES_FILE")
+            if cookiefile:
+                p = Path(cookiefile).expanduser()
+                if p.exists():
+                    return {"cookiefile": str(p)}
+        except Exception:
+            pass
+        try:
+            browser = (os.getenv("YT_COOKIES_FROM_BROWSER") or "").strip()
+            profile = (os.getenv("YT_COOKIES_BROWSER_PROFILE") or "").strip()
+            if browser:
+                return {"cookiesfrombrowser": (browser,) if not profile else (browser, profile)}
+        except Exception:
+            pass
+        return {}
+
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -149,10 +176,22 @@ def fetch_task(state, fetch_name: str, user_text: str):
     }
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        opts = {**ydl_opts, **_cookies_opts_from_env()}
+        with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(normalized_url, download=False)
     except Exception as e:
-        raise ToolError(f"Unable to retrieve video metadata: {e}", tool_name=tool_name)
+        msg = str(e)
+        # Provide actionable guidance when YouTube blocks anonymous requests
+        if any(k in msg for k in ["Sign in to confirm", "cookies", "consent", "private", "account"]):
+            raise ToolError(
+                (
+                    "Unable to retrieve video metadata due to YouTube requiring authentication. "
+                    "Set YT_COOKIES_FILE to a cookies.txt export, or set YT_COOKIES_FROM_BROWSER=chrome "
+                    "(and optionally YT_COOKIES_BROWSER_PROFILE=Default) so yt-dlp can use your local browser session."
+                ),
+                tool_name=tool_name,
+            )
+        raise ToolError(f"Unable to retrieve video metadata: {msg}", tool_name=tool_name)
 
     # 3) Validate basics and build VideoMeta
     if info.get("entries"):

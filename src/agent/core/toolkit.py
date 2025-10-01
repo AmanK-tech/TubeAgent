@@ -211,7 +211,20 @@ def dispatch_tool_call(state, name: str, params: dict) -> dict:
 
     if tool == "transcribe_asr":
         def _do_transcribe_and_maybe_summarise():
-            # Always transcribe first
+            # Fast path: if we already have transcription artifacts and this is a follow-up
+            # (user_req provided), skip re-transcription and go straight to global summarization.
+            user_req = params.get("user_req")
+            ta_existing = (getattr(state, "artifacts", {}) or {}).get("transcribe_asr", {})
+            already_transcribed = isinstance(ta_existing, dict) and bool(ta_existing.get("chunks"))
+            if isinstance(user_req, str) and user_req.strip() and already_transcribed:
+                return summarise_gemini(
+                    state,
+                    user_req,
+                    intent=params.get("intent"),
+                    include_metadata=bool(params.get("include_metadata", False)),
+                )
+
+            # Otherwise, transcribe now (first-time or no prior artifacts)
             transcribe_task(
                 state,
                 tool,
@@ -219,12 +232,12 @@ def dispatch_tool_call(state, name: str, params: dict) -> dict:
                 model=params.get("model"),
                 concurrency=params.get("concurrency"),
             )
-            # If user_req provided, run global summary now and return text
-            user_req = params.get("user_req")
-            if isinstance(user_req, str) and user_req.strip():
+            # If user_req provided, run global summary and return text
+            user_req2 = params.get("user_req")
+            if isinstance(user_req2, str) and user_req2.strip():
                 return summarise_gemini(
                     state,
-                    user_req,
+                    user_req2,
                     intent=params.get("intent"),
                     include_metadata=bool(params.get("include_metadata", False)),
                 )

@@ -9,7 +9,8 @@ from ...schemas.session import (
     ListSessionsResponse,
     Session as SessionSchema,
 )
-from ...services.cleanup import safe_purge_runtime, delete_gemini_uploads
+from ...services.cleanup import safe_purge_runtime, delete_gemini_uploads, cleanup_session_artifacts
+from ...sockets.manager import ws_manager
 
 
 router = APIRouter()
@@ -41,8 +42,40 @@ async def delete_session(session_id: str, bg: BackgroundTasks) -> dict:
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
     # Launch cleanup tasks (best-effort)
+    # 1) Per-session artifacts: extract folder, summaries/<job-id>, Gemini uploads
+    try:
+        bg.add_task(cleanup_session_artifacts, dict(getattr(s, "agent_ctx", {}) or {}))
+    except Exception:
+        pass
+    # 2) Optional full runtime purge (mirrors cleanup_runtime.py -y behavior)
     bg.add_task(safe_purge_runtime)
-    # If you track Gemini files per session, pass them here; we don't in memory.
+    # 3) Legacy hook (no-op here but kept for compatibility)
     bg.add_task(delete_gemini_uploads, [], None)
     return {"ok": True}
 
+
+@router.post("/{session_id}/close")
+async def close_session(session_id: str, bg: BackgroundTasks) -> dict:
+    """Best-effort cleanup when a client tab/app is closed.
+
+    - If there are still active WS connections for this session, skip cleanup.
+    - Otherwise, perform per-session cleanup and delete it from memory.
+    - Does NOT run full runtime purge by default (to avoid affecting other sessions).
+    """
+    s = store.get_session(session_id)
+    if not s:
+        return {"ok": True, "skipped": "not_found"}
+
+    try:
+        if await ws_manager.has_connections(session_id):
+            return {"ok": False, "skipped": "active_connections"}
+    except Exception:
+        pass
+
+    # Remove session + artifacts
+    store.delete_session(session_id)
+    try:
+        bg.add_task(cleanup_session_artifacts, dict(getattr(s, "agent_ctx", {}) or {}))
+    except Exception:
+        pass
+    return {"ok": True}

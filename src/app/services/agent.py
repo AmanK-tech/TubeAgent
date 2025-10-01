@@ -127,7 +127,8 @@ class AgentService:
             if len(candidate) > 100:
                 candidate = candidate[:97].rstrip() + "…"
 
-            return f"**{candidate}**\n\n" + t
+            # Use Markdown heading so UI can render larger typography via prose styles
+            return f"## {candidate}\n\n" + t
 
         final_text = _ensure_heading(final_text)
 

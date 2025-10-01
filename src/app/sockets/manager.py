@@ -49,6 +49,13 @@ class WSManager:
     async def emit_error(self, session_id: str, message: str) -> None:
         await self._broadcast(session_id, {"type": "error", "message": message})
 
+    async def has_connections(self, session_id: str) -> bool:
+        async with self._lock:
+            return bool(self._conns.get(session_id))
+
+    async def active_session_ids(self) -> set[str]:
+        async with self._lock:
+            return set(self._conns.keys())
+
 
 ws_manager = WSManager()
-
