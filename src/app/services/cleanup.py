@@ -4,6 +4,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Iterable, Optional
+import json
 
 try:
     from google import genai  # type: ignore
@@ -143,6 +144,33 @@ def cleanup_session_artifacts(agent_ctx: dict) -> None:
         except Exception:
             job_id = None
 
+    # Try to capture any downloaded media path before deleting extract dir
+    dl_candidates: set[Path] = set()
+    try:
+        # 1) From manifest JSON if available
+        if manifest_p and manifest_p.exists():
+            try:
+                data = json.loads(manifest_p.read_text(encoding="utf-8"))
+                cand = data.get("downloaded_path") or (data.get("result", {}) or {}).get("downloaded_path")
+                if isinstance(cand, str) and cand:
+                    dl_candidates.add(Path(cand))
+                # Sometimes video_path is stored under result
+                vpath = (data.get("result", {}) or {}).get("video_path")
+                if isinstance(vpath, str) and vpath:
+                    dl_candidates.add(Path(vpath))
+            except Exception:
+                pass
+        # 2) From extract_audio artifacts
+        try:
+            ea = arts.get("extract_audio", {}) if isinstance(arts, dict) else {}
+            v = ea.get("video_path") if isinstance(ea, dict) else None
+            if isinstance(v, str) and v:
+                dl_candidates.add(Path(v))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     # Delete extract cache dir
     _safe_rmtree(extract_dir)
 
@@ -162,34 +190,23 @@ def cleanup_session_artifacts(agent_ctx: dict) -> None:
         pass
     delete_gemini_uploads_by_names(names)
 
-
-def clean_extract_jobs_and_downloads() -> None:
-    """Remove all per-job folders under cache/extract and .webm files in downloads.
-
-    - Keeps the extract folder itself intact; only deletes its immediate subfolders.
-    - Deletes only *.webm files from runtime/downloads (preserves other formats).
-    - Best-effort; silently ignores errors.
-    """
+    # Delete only this session's downloaded media in runtime/downloads
     try:
-        extract_root = RUNTIME_PATH / "cache" / "extract"
-        if extract_root.exists() and extract_root.is_dir():
-            for child in list(extract_root.iterdir()):
-                try:
-                    if child.is_dir() and _is_under_runtime(child):
-                        shutil.rmtree(child, ignore_errors=True)
-                except Exception:
+        downloads_root = (RUNTIME_PATH / "downloads").resolve()
+        for p in list(dl_candidates):
+            try:
+                rp = Path(p).resolve()
+                if not rp.exists() or not rp.is_file():
                     continue
+                # Only delete files inside runtime/downloads to avoid accidental data loss
+                if downloads_root in rp.parents or rp.parent == downloads_root:
+                    # Optionally limit to common media extensions
+                    if rp.suffix.lower() in {".webm", ".mp4", ".mkv", ".mov", ".m4a"}:
+                        rp.unlink(missing_ok=True)
+            except Exception:
+                continue
     except Exception:
         pass
 
-    try:
-        downloads = RUNTIME_PATH / "downloads"
-        if downloads.exists() and downloads.is_dir():
-            for f in list(downloads.glob("*.webm")):
-                try:
-                    if f.is_file() and _is_under_runtime(f):
-                        f.unlink(missing_ok=True)
-                except Exception:
-                    continue
-    except Exception:
-        pass
+
+# NOTE: Removed global cleaner that wiped all extract jobs; per-session cleanup is safer.

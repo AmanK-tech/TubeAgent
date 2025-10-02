@@ -19,7 +19,7 @@ from .api.routes.messages import router as messages_router
 from .sockets.ws import router as ws_router
 from .sockets.manager import ws_manager
 from .state import store
-from .services.cleanup import cleanup_session_artifacts, safe_purge_runtime, clean_extract_jobs_and_downloads
+from .services.cleanup import cleanup_session_artifacts, safe_purge_runtime
 
 
 def create_app() -> FastAPI:
@@ -77,8 +77,6 @@ def create_app() -> FastAPI:
                         ctx = dict(getattr(s, "agent_ctx", {}) or {})
                         store.delete_session(s.id)
                         cleanup_session_artifacts(ctx)
-                        # Clear leftover extract job dirs and .webm downloads each sweep
-                        clean_extract_jobs_and_downloads()
                         if purge_runtime:
                             safe_purge_runtime()
                     except Exception:
@@ -137,11 +135,7 @@ def create_app() -> FastAPI:
                 safe_purge_runtime()
             except Exception:
                 pass
-        # Always perform non-destructive cleanup of extract jobs and downloads
-        try:
-            clean_extract_jobs_and_downloads()
-        except Exception:
-            pass
+        # Per-session cleanup already ran; optional full purge may run above.
 
     return app
 

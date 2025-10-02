@@ -272,9 +272,16 @@ def run_session(
 
                 # Execute tool (with retries) and cap payload size back to LLM
                 tool_result = _safe_dispatch(state, name, args)
-                # Bubble tool failures immediately instead of looping to step limit
+                # Handle URL-direct failures by falling back to transcribe_asr before bubbling error
                 try:
-                    if not (tool_result or {}).get("ok", False):
+                    ok = bool((tool_result or {}).get("ok", False))
+                    if not ok:
+                        if name == "summarise_url_direct":
+                            fb = _safe_dispatch(state, "transcribe_asr", {"user_req": user_text})
+                            if (fb or {}).get("ok") and isinstance(fb.get("result"), str):
+                                final_text = fb.get("result") or ""
+                                _append_and_save_history(state, user_text, final_text)
+                                return final_text
                         err = (tool_result or {}).get("error")
                         msg_err = (err or {}).get("message") if isinstance(err, dict) else (str(err) if err is not None else "Tool failed")
                         raise ToolError(msg_err or f"{name} failed", tool_name=name)
@@ -378,9 +385,14 @@ def run_hybrid_session(
                     max_output_tokens=max_output_tokens,
                 )
 
-            # Bubble tool failures immediately
+            # Handle tool failures with targeted fallback for summarise_url_direct
             try:
-                if not (res or {}).get("ok", False):
+                ok = bool((res or {}).get("ok", False))
+                if not ok:
+                    if name == "summarise_url_direct":
+                        fb = dispatch_tool_call(state, "transcribe_asr", {"user_req": user_text})
+                        if (fb or {}).get("ok") and isinstance(fb.get("result"), str):
+                            return fb.get("result") or ""
                     err = (res or {}).get("error")
                     msg_err = (err or {}).get("message") if isinstance(err, dict) else (str(err) if err is not None else "Tool failed")
                     raise ToolError(msg_err or f"{name} failed", tool_name=name)

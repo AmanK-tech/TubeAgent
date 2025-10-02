@@ -9,7 +9,8 @@ from ...schemas.session import (
     ListSessionsResponse,
     Session as SessionSchema,
 )
-from ...services.cleanup import safe_purge_runtime, delete_gemini_uploads, cleanup_session_artifacts, clean_extract_jobs_and_downloads
+import os
+from ...services.cleanup import safe_purge_runtime, delete_gemini_uploads, cleanup_session_artifacts
 from ...sockets.manager import ws_manager
 
 
@@ -48,11 +49,13 @@ async def delete_session(session_id: str, bg: BackgroundTasks) -> dict:
     except Exception:
         pass
     # 2) Optional full runtime purge (mirrors cleanup_runtime.py -y behavior)
-    bg.add_task(safe_purge_runtime)
+    try:
+        if (os.getenv("PURGE_RUNTIME_ON_SESSION_DELETE") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            bg.add_task(safe_purge_runtime)
+    except Exception:
+        pass
     # 3) Legacy hook (no-op here but kept for compatibility)
     bg.add_task(delete_gemini_uploads, [], None)
-    # 4) Always clear extract job folders and webm downloads (keep roots)
-    bg.add_task(clean_extract_jobs_and_downloads)
     return {"ok": True}
 
 
@@ -78,10 +81,6 @@ async def close_session(session_id: str, bg: BackgroundTasks) -> dict:
     store.delete_session(session_id)
     try:
         bg.add_task(cleanup_session_artifacts, dict(getattr(s, "agent_ctx", {}) or {}))
-    except Exception:
-        pass
-    try:
-        bg.add_task(clean_extract_jobs_and_downloads)
     except Exception:
         pass
     return {"ok": True}
