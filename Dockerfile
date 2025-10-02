@@ -45,7 +45,7 @@ USER appuser
 # If YT_COOKIES_B64 is provided, the entrypoint will write it to /run/secrets/yt_cookies.txt
 # and export YT_COOKIES_FILE to that path automatically.
 
-COPY bin/start.sh /app/bin/start.sh
-RUN chmod +x /app/bin/start.sh
+# Copy entrypoint with execute bit and ownership set (works with BuildKit)
+COPY --chown=appuser:appuser --chmod=0755 bin/start.sh /app/bin/start.sh
 
 ENTRYPOINT ["/app/bin/start.sh"]
