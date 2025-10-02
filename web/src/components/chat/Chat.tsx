@@ -17,6 +17,7 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
   // Soft auto-reconnect nonce; bumping this re-runs the WS effect
   const [wsNonce, setWsNonce] = useState(0)
   const mountedRef = useRef<boolean>(true)
+  const [reconnectAttempts, setReconnectAttempts] = useState(0)
 
   useEffect(() => {
     mountedRef.current = true
@@ -53,6 +54,7 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
 
     ws.onopen = () => {
       setWsError('')
+      setReconnectAttempts(0)
       startKeepAlive()
       // Send an immediate ping to keep upstream proxies from idling us out
       try { ws.send(JSON.stringify({ type: 'ping' })) } catch {}
@@ -64,15 +66,24 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
       // Try to refresh the REST history in case server finished the message
       refetch()
     }
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (pingTimer) window.clearInterval(pingTimer)
       setStreamText('')
-      setWsError('Connection closed')
+      // Only surface a user-visible notice after a couple failures; otherwise silently reconnect
+      setReconnectAttempts((prev) => {
+        const next = prev + 1
+        if (next >= 2) {
+          setWsError('Connection closed. Reconnecting…')
+        }
+        return next
+      })
       // Pull latest messages so a completed assistant reply shows up
       refetch()
       // Soft auto-reconnect with small backoff if still mounted and session unchanged
       if (mountedRef.current && sessionId) {
-        reconnectTimer = window.setTimeout(() => setWsNonce((n) => n + 1), 1500) as unknown as number
+        const attempt = reconnectAttempts + 1
+        const delay = Math.min(15000, 1500 * Math.pow(2, Math.max(0, attempt - 1)))
+        reconnectTimer = window.setTimeout(() => setWsNonce((n) => n + 1), delay) as unknown as number
       }
     }
 
