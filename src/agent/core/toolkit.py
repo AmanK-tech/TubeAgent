@@ -11,7 +11,7 @@ from agent.tools.transcribe import transcribe_task
 from agent.tools.emit_output import emit_output
 from agent.tools.answer_from_metadata import answer_from_metadata
 from agent.llm.client import LLMClient
-from agent.tools.transcribe import summarise_gemini
+from agent.tools.transcribe import summarise_gemini, summarise_url_direct
 
 
 def to_jsonable(obj:Any) -> Any:
@@ -65,6 +65,23 @@ def get_tools() -> list[dict[str, Any]]:
                     },
                     "required": ["user_text"],
                     "additionalProperties": False
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "summarise_url_direct",
+                "description": "Summarise a YouTube video by passing the public URL directly to Gemini (no local download/ASR). Intended for videos up to ~20 minutes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string", "description": "Public YouTube URL (normalized)."},
+                        "user_req": {"type": "string", "description": "User's question or instruction."},
+                        "model": {"type": "string", "description": "Optional Gemini model override (default from env)."},
+                    },
+                    "required": ["url", "user_req"],
+                    "additionalProperties": False,
                 },
             },
         },
@@ -250,6 +267,18 @@ def dispatch_tool_call(state, name: str, params: dict) -> dict:
             }
 
         return run_tool_json(state, tool, _do_transcribe_and_maybe_summarise)
+
+    if tool == "summarise_url_direct":
+        return run_tool_json(
+            state,
+            tool,
+            lambda: summarise_url_direct(
+                state,
+                params.get("url"),
+                params.get("user_req"),
+                model=params.get("model"),
+            ),
+        )
 
     if tool == "emit_output":
         return run_tool_json(

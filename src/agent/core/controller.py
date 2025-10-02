@@ -393,6 +393,10 @@ def run_hybrid_session(
             if name == "transcribe_asr" and isinstance(res, dict) and res.get("ok") and isinstance(res.get("result"), str):
                 return res.get("result") or ""
 
+            # Treat URL-direct summary as terminal output (return text directly)
+            if name == "summarise_url_direct" and isinstance(res, dict) and res.get("ok") and isinstance(res.get("result"), str):
+                return res.get("result") or ""
+
             # If emit_output completed successfully, finalize with saved content or a confirmation
             if name == "emit_output" and isinstance(res, dict) and res.get("ok"):
                 try:

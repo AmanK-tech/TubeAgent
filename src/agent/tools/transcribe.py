@@ -815,3 +815,126 @@ def summarise_gemini(
         pass
 
     return result_text
+
+
+def summarise_url_direct(
+    state: AgentState,
+    url: str,
+    user_req: str,
+    *,
+    model: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    timeout_s: Optional[float] = None,
+) -> str:
+    """Summarise a YouTube video by passing the URL directly to Gemini.
+
+    Uses contextengineering.allocate_tokens() to compute an output budget from
+    known duration and query, then clamps to URL_DIRECT_MAX_OUTPUT_TOKENS.
+    Best-effort; on failure, callers should fall back to the standard pipeline.
+    """
+    tool_name = "summarise_url_direct"
+    client = _init_gemini_client(tool_name)
+    model = model or os.getenv("URL_DIRECT_MODEL", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+
+    # Derive duration and title where possible
+    try:
+        vid = getattr(state, "video", None)
+        duration_s = float(getattr(vid, "duration_s", 0) or 0)
+        title = getattr(vid, "title", None)
+    except Exception:
+        duration_s, title = 0.0, None
+
+    # Token allocation and clamping
+    try:
+        alloc = allocate_tokens(
+            video_duration_s=duration_s,
+            query_text=user_req,
+            title=title,
+        )
+        gen_cfg = to_generation_config(alloc)
+        target = int(gen_cfg.get("max_output_tokens", alloc.tokens) or alloc.tokens)
+    except Exception:
+        target = 600
+    try:
+        mult = float(os.getenv("URL_DIRECT_TOKEN_MULTIPLIER", "1.0") or 1.0)
+    except Exception:
+        mult = 1.0
+    # Rely on contextengineering allocation bounds (min/max) without imposing a hard external cap
+    final_tokens = max(1, int(target * mult))
+    gen_cfg_dict = {"max_output_tokens": final_tokens}
+
+    # Compose contents: URL + user instruction
+    system_instruction = _load_prompt_text("global_prompt.txt")
+    prompt = (
+        f"User request:\n{user_req}\n\n"
+        "Important: Do not include any timestamps in the output.\n"
+    )
+    contents: list[Any] = []
+    if genai_types is not None:
+        contents.append(
+            genai_types.Part(
+                file_data=genai_types.FileData(file_uri=url)  # type: ignore
+            )
+        )
+    else:
+        contents.append({"file_data": {"file_uri": url}})
+    contents.append(prompt)
+
+    # Execute
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=contents,
+            system_instruction=(system_instruction if (system_instruction or "").strip() else None),
+            generation_config=gen_cfg_dict,
+        )
+    except TypeError:
+        # Older client signature
+        if genai_types is not None:
+            cfg_obj = genai_types.GenerateContentConfig(
+                system_instruction=(system_instruction if (system_instruction or "").strip() else None),
+            )
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=cfg_obj,
+                generation_config=gen_cfg_dict,
+            )
+        else:
+            response = client.models.generate_content(model=model, contents=contents)
+
+    text = getattr(response, "text", None) or ""
+
+    # Persist quick take to summaries/<job-id>/
+    try:
+        runtime_dir = getattr(state.config, "runtime_dir", Path("runtime")) if getattr(state, "config", None) else Path("runtime")
+        # Prefer job id based on manifest if available; otherwise use 'session'
+        job_id = "session"
+        try:
+            arts = getattr(state, "artifacts", {}) or {}
+            ta = arts.get("transcribe_asr", {}) or {}
+            mp = ta.get("manifest_path")
+            if mp:
+                job_id = Path(mp).parent.name
+        except Exception:
+            pass
+        summary_dir = Path(runtime_dir) / "summaries" / job_id
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        qp = summary_dir / "quick_take.gemini.txt"
+        qp.write_text((text or "").strip() + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+    # Record artifacts
+    try:
+        state.artifacts.setdefault(tool_name, {})
+        state.artifacts[tool_name].update({
+            "model": model,
+            "tokens": final_tokens,
+            "requested_tokens": target,
+            "url": url,
+        })
+    except Exception:
+        pass
+
+    return text
