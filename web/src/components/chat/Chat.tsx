@@ -19,6 +19,11 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [data, streamText])
 
+  // Clear any previous error when a new request starts
+  useEffect(() => {
+    if (loading) setWsError('')
+  }, [loading])
+
   useEffect(() => {
     if (!sessionId) return
     const base = import.meta.env.VITE_API_URL || window.location.origin

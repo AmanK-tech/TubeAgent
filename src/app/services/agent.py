@@ -89,45 +89,35 @@ class AgentService:
             store.set_agent_context(session_id, ctx_out)
         except Exception:
             pass
-        # Ensure there is a prominent heading at the top of the output so the UI
-        # can render it in bold/highlighted style. If a heading is already present
-        # (Markdown #/## or **bold** on the first line), leave as-is.
+        # Ensure there is a prominent heading derived from the model's content for every answer.
+        # We do not use the user's question as the title and we avoid Q1/Q2 prefixes.
         def _ensure_heading(text: str) -> str:
             t = (text or "").lstrip()
             if not t:
                 return t
             import re
             first_line = t.splitlines()[0].strip()
-            has_md_header = bool(re.match(r"^#{1,6}\s+\S", first_line))
-            has_bold_header = bool(re.match(r"^\*\*.+\*\*$", first_line))
-            if has_md_header or has_bold_header:
+            # If the model already produced a heading, keep it
+            if re.match(r"^#{1,6}\s+\S", first_line) or re.match(r"^\*\*.+\*\*$", first_line):
                 return t
 
-            # Prefer video title when available; otherwise derive from user/request or content.
+            # Derive a concise title from the model's content (first meaningful sentence/line)
+            parts = re.split(r"(?<=[.!?])\s+|\n", t)
             candidate = None
-            try:
-                vid = getattr(state, "video", None)
-                if vid and getattr(vid, "title", None):
-                    candidate = str(getattr(vid, "title"))
-            except Exception:
-                candidate = None
-
+            for p in parts:
+                p = (p or "").strip()
+                if not p:
+                    continue
+                # Skip bullets or trivial markers
+                if re.match(r"^[\-\*•]\s+", p):
+                    continue
+                candidate = p.rstrip(".:;—-")
+                break
             if not candidate:
-                # Take first sentence or up to 80 chars from content as a title-ish line
-                parts = re.split(r"(?<=[.!?])\s+|\n", t)
-                if parts and parts[0]:
-                    candidate = parts[0].strip().rstrip(".:;—-")
-            if not candidate and (user_text or "").strip():
-                candidate = f"Answer: {user_text.strip()}"
-            if not candidate:
-                candidate = "Response"
-
-            # Trim overly long headings
+                candidate = "Summary"
             candidate = candidate.strip()
             if len(candidate) > 100:
                 candidate = candidate[:97].rstrip() + "…"
-
-            # Use Markdown heading so UI can render larger typography via prose styles
             return f"## {candidate}\n\n" + t
 
         final_text = _ensure_heading(final_text)

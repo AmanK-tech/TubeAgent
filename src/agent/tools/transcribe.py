@@ -834,7 +834,8 @@ def summarise_url_direct(
     """
     tool_name = "summarise_url_direct"
     client = _init_gemini_client(tool_name)
-    model = model or os.getenv("URL_DIRECT_MODEL", os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
+    # Use Gemini 2.5 Flash for URL-direct ingestion
+    model = "gemini-2.5-flash"
 
     # Derive duration and title where possible
     try:
@@ -863,47 +864,47 @@ def summarise_url_direct(
     final_tokens = max(1, int(target * mult))
     gen_cfg_dict = {"max_output_tokens": final_tokens}
 
-    # Compose contents: URL + user instruction
-    system_instruction = _load_prompt_text("global_prompt.txt")
+    # Compose minimal prompt text (no timestamps) and use GenerativeModel API first
     prompt = (
         f"User request:\n{user_req}\n\n"
         "Important: Do not include any timestamps in the output.\n"
     )
-    contents: list[Any] = []
-    if genai_types is not None:
-        contents.append(
-            genai_types.Part(
-                file_data=genai_types.FileData(file_uri=url)  # type: ignore
-            )
-        )
-    else:
-        contents.append({"file_data": {"file_uri": url}})
-    contents.append(prompt)
 
-    # Execute
+    text = ""
+    used_generativeai = False
     try:
-        response = client.models.generate_content(
-            model=model,
-            contents=contents,
-            system_instruction=(system_instruction if (system_instruction or "").strip() else None),
-            generation_config=gen_cfg_dict,
-        )
-    except TypeError:
-        # Older client signature
-        if genai_types is not None:
-            cfg_obj = genai_types.GenerateContentConfig(
-                system_instruction=(system_instruction if (system_instruction or "").strip() else None),
-            )
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=cfg_obj,
-                generation_config=gen_cfg_dict,
-            )
-        else:
-            response = client.models.generate_content(model=model, contents=contents)
+        import google.generativeai as ggenai  # type: ignore
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if api_key:
+            ggenai.configure(api_key=api_key)
+        model_obj = ggenai.GenerativeModel(model)
+        contents_ga = [
+            {
+                "parts": [
+                    {"file_data": {"file_uri": url, "mime_type": "video/mp4"}},
+                    {"text": prompt},
+                ]
+            }
+        ]
+        resp = model_obj.generate_content(contents=contents_ga)
+        text = getattr(resp, "text", None) or ""
+        used_generativeai = True
+    except Exception:
+        used_generativeai = False
 
-    text = getattr(response, "text", None) or ""
+    if not used_generativeai:
+        # Fallback: use google.genai client with the simplest supported signature
+        contents_plain: list[Any] = [
+            {"file_data": {"file_uri": url}},
+            {"text": prompt},
+        ]
+        try:
+            response = client.models.generate_content(model=model, contents=contents_plain)
+            text = getattr(response, "text", None) or ""
+        except Exception:
+            # Final minimal fallback: text-only
+            response = client.models.generate_content(model=model, contents=[prompt])
+            text = getattr(response, "text", None) or ""
 
     # Persist quick take to summaries/<job-id>/
     try:
