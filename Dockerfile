@@ -25,8 +25,7 @@ RUN pip install --no-cache-dir \
     PyYAML \
     yt-dlp \
     google-genai \
-    google-generativeai \
-    audioop-lts
+    google-generativeai
 
 # --- App code ----------------------------------------------------------------
 # Copy only the backend source; exclude tests/web/etc via .dockerignore
