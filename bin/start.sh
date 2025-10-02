@@ -1,8 +1,6 @@
 #!/usr/bin/env sh
 set -eu
 
-mkdir -p /run/secrets
-
 # Pick a writable secrets directory (avoid /run on locked-down hosts)
 pick_dir() {
   for d in \
@@ -16,6 +14,7 @@ pick_dir() {
   return 1
 }
 
+# Get the first writable directory
 SECRETS_DIR="$(pick_dir || true)"
 
 # If base64 cookies are provided, materialize them to a readable file under SECRETS_DIR
