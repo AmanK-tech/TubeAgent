@@ -11,28 +11,44 @@ export const ChatPage: React.FC = () => {
   const [active, setActive] = useState<string | undefined>()
   const [showLanding, setShowLanding] = useState<boolean>(true)
   const [inFlight, setInFlight] = useState<boolean>(false)
+  const ACTIVE_KEY = 'tubeagent.activeSessionId'
 
   useEffect(() => {
-    // Ensure at least one session exists for first-time UX
+    // Restore last active session if present; otherwise pick first or create one.
     listSessions().then(async (res) => {
-      if (!res.items.length) {
-        const s = await createSession()
-        setActive(s.id)
-        setShowLanding(true)
+      const stored = (() => {
+        try { return localStorage.getItem(ACTIVE_KEY) || undefined } catch { return undefined }
+      })()
+
+      let sid: string | undefined
+      if (stored && res.items.find((s) => s.id === stored)) {
+        sid = stored
+      } else if (res.items.length > 0) {
+        sid = res.items[0].id
       } else {
-        const sid = res.items[0].id
-        setActive(sid)
-        try {
-          const msgs = await listMessages(sid)
-          setShowLanding((msgs.items || []).length === 0)
-        } catch {
-          setShowLanding(true)
-        }
+        const s = await createSession()
+        sid = s.id
+      }
+
+      setActive(sid)
+      try {
+        const msgs = await listMessages(sid!)
+        setShowLanding((msgs.items || []).length === 0)
+      } catch {
+        setShowLanding(true)
       }
     })
   }, [])
 
-  // Attempt to close the active session when the page is closed/navigated away.
+  // Persist active session id locally so a browser refresh restores the chat.
+  useEffect(() => {
+    if (active) {
+      try { localStorage.setItem(ACTIVE_KEY, active) } catch {}
+    }
+  }, [active])
+
+  // On page close/navigation away, request a delayed close on the server.
+  // The backend applies a short grace period so a quick reload won't lose the session.
   useEffect(() => {
     if (!active) return
     const handler = () => {
@@ -44,7 +60,6 @@ export const ChatPage: React.FC = () => {
           const blob = new Blob([payload], { type: 'application/json' })
           navigator.sendBeacon(url, blob)
         } else {
-          // Fallback using keepalive fetch
           fetch(url, { method: 'POST', body: payload, headers: { 'Content-Type': 'application/json' }, keepalive: true }).catch(() => {})
         }
       } catch {}
@@ -95,6 +110,7 @@ export const ChatPage: React.FC = () => {
                 await sendMessage(active, { role: 'user', content: t, user_req: t })
                 // Immediately refresh messages so the just-sent user message appears
                 await qc.invalidateQueries({ queryKey: ['messages', active] })
+                try { localStorage.setItem(ACTIVE_KEY, active) } catch {}
               } catch (e) {
                 setInFlight(false)
                 throw e

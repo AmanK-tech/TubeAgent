@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: tubeagent-api
+    env: docker
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /health
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 5
+    envVars:
+      - key: RUNTIME_DIR
+        value: /data/runtime
+      - key: PURGE_RUNTIME_ON_SHUTDOWN
+        value: "false"
+      - key: SESSION_IDLE_TTL_MINUTES
+        value: "60"
+      - key: SESSION_CLOSE_GRACE_SECONDS
+        value: "10"
+      # Set this to your deployed frontend origin (e.g., Netlify/Vercel domain)
+      - key: WEB_ORIGIN
+        value: https://your-frontend-domain
+      # Provider/API secrets (create these in Render → Secrets)
+      - key: DEEPSEEK_API_KEY
+        fromSecret: DEEPSEEK_API_KEY
+      - key: GOOGLE_API_KEY
+        fromSecret: GOOGLE_API_KEY
+      # Optional: base64-encoded cookies.txt (kept as a secret). If set, the entrypoint will
+      # write it to /run/secrets/yt_cookies.txt and export YT_COOKIES_FILE accordingly.
+      - key: YT_COOKIES_B64
+        fromSecret: YT_COOKIES_B64
+
+  - type: static
+    name: tubeagent-web
+    autoDeploy: true
+    envVars:
+      # Point the web app to the API URL automatically
+      - key: VITE_API_URL
+        fromService:
+          name: tubeagent-api
+          type: web
+          property: url
+    buildCommand: cd web && npm ci && npm run build
+    publishPath: web/dist
+

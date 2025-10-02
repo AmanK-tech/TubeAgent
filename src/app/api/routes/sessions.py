@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+import asyncio
 
 from ...state import store
 from ...schemas.session import (
@@ -61,26 +62,57 @@ async def delete_session(session_id: str, bg: BackgroundTasks) -> dict:
 
 @router.post("/{session_id}/close")
 async def close_session(session_id: str, bg: BackgroundTasks) -> dict:
-    """Best-effort cleanup when a client tab/app is closed.
+    """Schedule a delayed best-effort cleanup when a client tab/app is closed.
 
-    - If there are still active WS connections for this session, skip cleanup.
-    - Otherwise, perform per-session cleanup and delete it from memory.
-    - Does NOT run full runtime purge by default (to avoid affecting other sessions).
+    Rationale: During a full page refresh the WebSocket briefly disconnects
+    and reconnects. Immediate deletion would kill the session mid-refresh.
+    We therefore apply a small grace period, then check for active WS
+    connections before deleting the session and cleaning artifacts.
     """
     s = store.get_session(session_id)
     if not s:
         return {"ok": True, "skipped": "not_found"}
 
-    try:
-        if await ws_manager.has_connections(session_id):
-            return {"ok": False, "skipped": "active_connections"}
-    except Exception:
-        pass
+    # Copy minimal context needed for cleanup later
+    ctx = dict(getattr(s, "agent_ctx", {}) or {})
 
-    # Remove session + artifacts
-    store.delete_session(session_id)
     try:
-        bg.add_task(cleanup_session_artifacts, dict(getattr(s, "agent_ctx", {}) or {}))
+        grace = float(os.getenv("SESSION_CLOSE_GRACE_SECONDS", "8") or 8.0)
     except Exception:
-        pass
-    return {"ok": True}
+        grace = 8.0
+
+    async def _delayed_close(sid: str, ctx_copy: dict, wait_s: float) -> None:
+        try:
+            await asyncio.sleep(max(0.0, float(wait_s)))
+            # If a client reconnected during the grace window, keep the session
+            try:
+                if await ws_manager.has_connections(sid):
+                    return
+            except Exception:
+                pass
+            # Delete session + artifacts
+            sess = store.delete_session(sid)
+            try:
+                cleanup_session_artifacts(ctx_copy)
+            except Exception:
+                pass
+        except Exception:
+            # Best-effort; swallow any background errors
+            pass
+
+    # Schedule delayed close; response returns immediately
+    try:
+        bg.add_task(_delayed_close, session_id, ctx, grace)
+    except Exception:
+        # If scheduling fails, fall back to immediate best-effort close
+        try:
+            sess = store.delete_session(session_id)
+        except Exception:
+            sess = None
+        try:
+            cleanup_session_artifacts(ctx)
+        except Exception:
+            pass
+        return {"ok": True, "grace_s": 0, "scheduled": False}
+
+    return {"ok": True, "scheduled": True, "grace_s": grace}

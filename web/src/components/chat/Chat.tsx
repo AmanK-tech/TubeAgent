@@ -14,6 +14,14 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
   const [streamText, setStreamText] = useState('')
   const [wsError, setWsError] = useState<string>('')
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  // Soft auto-reconnect nonce; bumping this re-runs the WS effect
+  const [wsNonce, setWsNonce] = useState(0)
+  const mountedRef = useRef<boolean>(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -29,14 +37,41 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
     const base = import.meta.env.VITE_API_URL || window.location.origin
     const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/chat/${sessionId}`)
 
-    ws.onopen = () => setWsError('')
+    // Keepalive ping every ~25s to avoid idle timeouts behind proxies
+    let pingTimer: number | undefined
+    const startKeepAlive = () => {
+      // window.setInterval returns number in browsers
+      pingTimer = window.setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: 'ping' })) } catch {}
+        }
+      }, 25000) as unknown as number
+    }
+
+    // Optional gentle reconnect timer
+    let reconnectTimer: number | undefined
+
+    ws.onopen = () => {
+      setWsError('')
+      startKeepAlive()
+    }
     ws.onerror = () => {
       setWsError('WebSocket connection error')
+      setStreamText('')
       onError?.('WebSocket connection error')
+      // Try to refresh the REST history in case server finished the message
+      refetch()
     }
     ws.onclose = () => {
-      // only show a soft hint; auto-reconnect handled by remount
-      // keep last known streamText as-is
+      if (pingTimer) window.clearInterval(pingTimer)
+      setStreamText('')
+      setWsError('Connection closed')
+      // Pull latest messages so a completed assistant reply shows up
+      refetch()
+      // Soft auto-reconnect with small backoff if still mounted and session unchanged
+      if (mountedRef.current && sessionId) {
+        reconnectTimer = window.setTimeout(() => setWsNonce((n) => n + 1), 1500) as unknown as number
+      }
     }
 
     ws.onmessage = (evt) => {
@@ -60,8 +95,12 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
         // ignore non-JSON WS frames
       }
     }
-    return () => ws.close()
-  }, [sessionId])
+    return () => {
+      try { ws.close() } catch {}
+      if (pingTimer) window.clearInterval(pingTimer)
+      if (reconnectTimer) window.clearTimeout(reconnectTimer)
+    }
+  }, [sessionId, wsNonce])
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6 relative">

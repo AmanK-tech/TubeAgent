@@ -1,0 +1,31 @@
+# VCS & local tooling
+.git
+.gitignore
+.DS_Store
+venv/
+ENV/
+.venv/
+__pycache__/
+*.pyc
+
+# Editor/IDE
+.idea/
+.vscode/
+
+# Build caches & runtime outputs
+runtime/
+dist/
+build/
+.cache/
+
+# Frontend (not needed in API image)
+web/node_modules/
+web/dist/
+web/.vite/
+web/.next/
+
+# Misc
+*.log
+*.tmp
+*.swp
+
