@@ -1,4 +1,4 @@
-**TubeAgent**
+#TubeAgent
 
 Agentic YouTube video summarizer with a FastAPI backend and a modern React (Vite) web UI. Paste a YouTube link and ask anything — TubeAgent fetches metadata, downloads and chunks media with ffmpeg, transcribes with Google Gemini, synthesizes a grounded global answer, and streams tokens to the UI over WebSockets. For short videos, it can summarize directly from the public URL (no local ASR).
 
