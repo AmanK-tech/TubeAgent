@@ -62,6 +62,23 @@ class MemoryStore:
             sess.updated_at = m.created_at
             return m
 
+    def replace_last_user_message(self, sid: str, new_content: str) -> Optional[Message]:
+        """Replace the last message if it is a user message; return the updated message or None.
+
+        Useful for retry flows where the previous user input caused an immediate validation error
+        and the next input is a corrected version that should not appear as a second bubble.
+        """
+        with self._lock:
+            sess = self.sessions.get(sid)
+            if not sess or not sess.messages:
+                return None
+            last = sess.messages[-1]
+            if last.role != "user":
+                return None
+            last.content = new_content
+            sess.updated_at = time.time()
+            return last
+
     # --- Agent context helpers -------------------------------------------------
     def set_agent_context(self, sid: str, ctx: dict) -> None:
         with self._lock:

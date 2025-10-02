@@ -864,10 +864,17 @@ def summarise_url_direct(
     final_tokens = max(1, int(target * mult))
     gen_cfg_dict = {"max_output_tokens": final_tokens}
 
-    # Compose minimal prompt text (no timestamps) and use GenerativeModel API first
+    # Compose minimal prompt text (no timestamps)
     prompt = (
         f"User request:\n{user_req}\n\n"
         "Important: Do not include any timestamps in the output.\n"
+    )
+
+    # Require a short title first when using URL-direct summary
+    system_instruction = (
+        "Begin with a single concise title as Markdown H2 (## Title) or bold (**Title**), "
+        "no more than 60 characters, no leading transition words (However, But, So, And, Yet, Although, While), "
+        "and no trailing punctuation. Then a blank line and provide the answer."
     )
 
     text = ""
@@ -877,7 +884,12 @@ def summarise_url_direct(
         api_key = os.getenv("GOOGLE_API_KEY")
         if api_key:
             ggenai.configure(api_key=api_key)
-        model_obj = ggenai.GenerativeModel(model)
+        # Attach the system instruction so the model emits a good title first
+        try:
+            model_obj = ggenai.GenerativeModel(model, system_instruction=system_instruction)
+        except TypeError:
+            # Older generativeai versions may not accept system_instruction in ctor
+            model_obj = ggenai.GenerativeModel(model)
         contents_ga = [
             {
                 "parts": [
@@ -886,7 +898,10 @@ def summarise_url_direct(
                 ]
             }
         ]
-        resp = model_obj.generate_content(contents=contents_ga)
+        try:
+            resp = model_obj.generate_content(contents=contents_ga, generation_config={"max_output_tokens": final_tokens})
+        except TypeError:
+            resp = model_obj.generate_content(contents=contents_ga)
         text = getattr(resp, "text", None) or ""
         used_generativeai = True
     except Exception:
@@ -899,11 +914,58 @@ def summarise_url_direct(
             {"text": prompt},
         ]
         try:
-            response = client.models.generate_content(model=model, contents=contents_plain)
+            # Prefer passing system instruction directly; fall back to config if needed
+            if genai_types is not None:
+                try:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=contents_plain,
+                        system_instruction=system_instruction,
+                        generation_config={"max_output_tokens": final_tokens},
+                    )
+                except TypeError:
+                    cfg_obj = genai_types.GenerateContentConfig(system_instruction=system_instruction)
+                    try:
+                        response = client.models.generate_content(
+                            model=model,
+                            contents=contents_plain,
+                            config=cfg_obj,
+                            generation_config={"max_output_tokens": final_tokens},
+                        )
+                    except TypeError:
+                        response = client.models.generate_content(
+                            model=model,
+                            contents=contents_plain,
+                            config=cfg_obj,
+                        )
+            else:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents_plain,
+                    system_instruction=system_instruction,
+                    generation_config={"max_output_tokens": final_tokens},
+                )
             text = getattr(response, "text", None) or ""
         except Exception:
             # Final minimal fallback: text-only
-            response = client.models.generate_content(model=model, contents=[prompt])
+            try:
+                if genai_types is not None:
+                    cfg_obj = genai_types.GenerateContentConfig(system_instruction=system_instruction)
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=[prompt],
+                        config=cfg_obj,
+                        generation_config={"max_output_tokens": final_tokens},
+                    )
+                else:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=[prompt],
+                        system_instruction=system_instruction,
+                        generation_config={"max_output_tokens": final_tokens},
+                    )
+            except Exception:
+                response = client.models.generate_content(model=model, contents=[prompt])
             text = getattr(response, "text", None) or ""
 
     # Persist quick take to summaries/<job-id>/

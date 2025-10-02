@@ -277,6 +277,15 @@ def run_session(
                     ok = bool((tool_result or {}).get("ok", False))
                     if not ok:
                         if name == "summarise_url_direct":
+                            # Fallback to full pipeline: extract_audio -> transcribe_asr
+                            src_url = None
+                            try:
+                                vid = getattr(state, "video", None)
+                                src_url = getattr(vid, "source_url", None)
+                            except Exception:
+                                src_url = None
+                            if src_url:
+                                _ = _safe_dispatch(state, "extract_audio", {"input_url": src_url})
                             fb = _safe_dispatch(state, "transcribe_asr", {"user_req": user_text})
                             if (fb or {}).get("ok") and isinstance(fb.get("result"), str):
                                 final_text = fb.get("result") or ""
@@ -390,6 +399,15 @@ def run_hybrid_session(
                 ok = bool((res or {}).get("ok", False))
                 if not ok:
                     if name == "summarise_url_direct":
+                        # Fallback to full pipeline: extract_audio -> transcribe_asr
+                        src_url = None
+                        try:
+                            vid = getattr(state, "video", None)
+                            src_url = getattr(vid, "source_url", None)
+                        except Exception:
+                            src_url = None
+                        if src_url:
+                            _ = dispatch_tool_call(state, "extract_audio", {"input_url": src_url})
                         fb = dispatch_tool_call(state, "transcribe_asr", {"user_req": user_text})
                         if (fb or {}).get("ok") and isinstance(fb.get("result"), str):
                             return fb.get("result") or ""

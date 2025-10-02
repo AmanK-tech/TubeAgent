@@ -89,38 +89,8 @@ class AgentService:
             store.set_agent_context(session_id, ctx_out)
         except Exception:
             pass
-        # Ensure there is a prominent heading derived from the model's content for every answer.
-        # We do not use the user's question as the title and we avoid Q1/Q2 prefixes.
-        def _ensure_heading(text: str) -> str:
-            t = (text or "").lstrip()
-            if not t:
-                return t
-            import re
-            first_line = t.splitlines()[0].strip()
-            # If the model already produced a heading, keep it
-            if re.match(r"^#{1,6}\s+\S", first_line) or re.match(r"^\*\*.+\*\*$", first_line):
-                return t
-
-            # Derive a concise title from the model's content (first meaningful sentence/line)
-            parts = re.split(r"(?<=[.!?])\s+|\n", t)
-            candidate = None
-            for p in parts:
-                p = (p or "").strip()
-                if not p:
-                    continue
-                # Skip bullets or trivial markers
-                if re.match(r"^[\-\*•]\s+", p):
-                    continue
-                candidate = p.rstrip(".:;—-")
-                break
-            if not candidate:
-                candidate = "Summary"
-            candidate = candidate.strip()
-            if len(candidate) > 100:
-                candidate = candidate[:97].rstrip() + "…"
-            return f"## {candidate}\n\n" + t
-
-        final_text = _ensure_heading(final_text)
+        # Do not modify content to synthesize a title; rely on model instructions.
+        # final_text remains as provided by the model.
 
         # Pseudo-stream by chunks
         if not final_text:

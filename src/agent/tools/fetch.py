@@ -61,8 +61,20 @@ def _extract_and_normalize_youtube_url(text: str) -> Optional[str]:
     Returns None if no valid YouTube URL found.
     """
     url_pattern = r"(https?://[^\s]+|www\.[^\s]+)"
+
+    def _sanitize_token(u: str) -> str:
+        s = (u or "").strip()
+        # Strip surrounding angle brackets often used in Markdown/email
+        if s.startswith("<") and s.endswith(">"):
+            s = s[1:-1]
+        # Trim common trailing punctuation that users include at sentence end
+        s = s.strip("'\"")
+        s = re.sub(r"[)\]\}>\.,;:!?]+$", "", s)
+        return s
+
     for raw in re.findall(url_pattern, text):
-        url = raw if raw.startswith("http") else f"https://{raw}"
+        cleaned = _sanitize_token(raw)
+        url = cleaned if cleaned.startswith("http") else f"https://{cleaned}"
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
         if not _is_youtube_host(host):
