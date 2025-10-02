@@ -37,7 +37,7 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
     const base = import.meta.env.VITE_API_URL || window.location.origin
     const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/chat/${sessionId}`)
 
-    // Keepalive ping every ~25s to avoid idle timeouts behind proxies
+    // Keepalive ping every ~15s to avoid idle timeouts behind proxies (Render free/edge)
     let pingTimer: number | undefined
     const startKeepAlive = () => {
       // window.setInterval returns number in browsers
@@ -45,7 +45,7 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
         if (ws.readyState === WebSocket.OPEN) {
           try { ws.send(JSON.stringify({ type: 'ping' })) } catch {}
         }
-      }, 25000) as unknown as number
+      }, 15000) as unknown as number
     }
 
     // Optional gentle reconnect timer
@@ -54,6 +54,8 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
     ws.onopen = () => {
       setWsError('')
       startKeepAlive()
+      // Send an immediate ping to keep upstream proxies from idling us out
+      try { ws.send(JSON.stringify({ type: 'ping' })) } catch {}
     }
     ws.onerror = () => {
       setWsError('WebSocket connection error')
