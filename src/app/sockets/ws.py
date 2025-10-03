@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+import asyncio
+import json
+import logging
 
 from .manager import ws_manager
 
@@ -10,15 +13,36 @@ router = APIRouter()
 
 @router.websocket("/ws/chat/{session_id}")
 async def chat_ws(ws: WebSocket, session_id: str):
+    logger = logging.getLogger("app.ws")
     await ws_manager.connect(session_id, ws)
     try:
         while True:
-            # Client may send ping/typing or user messages; we mainly echo pings
-            data = await ws.receive_json()
-            typ = data.get("type")
-            if typ == "ping":
-                await ws.send_json({"type": "pong"})
-            # user_message on WS is optional; REST POST triggers responses
-    except WebSocketDisconnect:
-        await ws_manager.disconnect(session_id, ws)
+            # Receive a text frame; tolerate non-JSON frames and transient errors.
+            try:
+                raw = await ws.receive_text()
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                # Log and continue rather than tearing down the socket immediately.
+                logger.exception("WebSocket receive error (session=%s)", session_id)
+                await asyncio.sleep(0.05)
+                continue
 
+            try:
+                data = json.loads(raw) if raw else {}
+            except Exception:
+                data = {}
+
+            typ = (data or {}).get("type")
+            if typ == "ping":
+                try:
+                    await ws.send_json({"type": "pong"})
+                except Exception:
+                    # Best-effort pong; keep the loop alive
+                    logger.debug("Failed to send pong (session=%s)", session_id)
+            # user_message on WS is optional; REST POST triggers responses
+    except Exception:
+        # Catch-all to avoid silent teardown on unexpected errors
+        logger.exception("WebSocket handler error (session=%s)", session_id)
+    finally:
+        await ws_manager.disconnect(session_id, ws)

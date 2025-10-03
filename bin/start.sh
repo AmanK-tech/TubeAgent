@@ -48,5 +48,11 @@ fi
 
 HOST="0.0.0.0"
 PORT="${PORT:-8000}"
+WS_PING_INTERVAL="${WS_PING_INTERVAL:-20}"
+WS_PING_TIMEOUT="${WS_PING_TIMEOUT:-20}"
 
-exec uvicorn app.main:app --host "$HOST" --port "$PORT"
+exec uvicorn app.main:app \
+  --host "$HOST" \
+  --port "$PORT" \
+  --ws-ping-interval "$WS_PING_INTERVAL" \
+  --ws-ping-timeout "$WS_PING_TIMEOUT"

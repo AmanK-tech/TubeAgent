@@ -36,8 +36,19 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
 
   useEffect(() => {
     if (!sessionId) return
-    const base = import.meta.env.VITE_API_URL || window.location.origin
-    const ws = new WebSocket(`${base.replace('http', 'ws')}/ws/chat/${sessionId}`)
+    const apiBase = (import.meta.env.VITE_API_URL as string) || window.location.origin
+    let wsUrl: string
+    try {
+      const u = new URL(apiBase)
+      const proto = u.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl = `${proto}//${u.host}/ws/chat/${sessionId}`
+    } catch {
+      // Fallback: strip scheme heuristically and rebuild origin
+      const isHttps = /^https:/i.test(apiBase)
+      const origin = apiBase.replace(/^https?:\/\//i, '').replace(/\/$/, '')
+      wsUrl = `${isHttps ? 'wss:' : 'ws:'}//${origin}/ws/chat/${sessionId}`
+    }
+    const ws = new WebSocket(wsUrl)
 
     // Keepalive ping every ~15s to avoid idle timeouts behind proxies (Render free/edge)
     let pingTimer: number | undefined
