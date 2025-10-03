@@ -13,6 +13,7 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
   })
   const [streamText, setStreamText] = useState('')
   const [wsError, setWsError] = useState<string>('')
+  const [stickyError, setStickyError] = useState<string>('')
   const bottomRef = useRef<HTMLDivElement | null>(null)
   // Soft auto-reconnect nonce; bumping this re-runs the WS effect
   const [wsNonce, setWsNonce] = useState(0)
@@ -60,20 +61,25 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
       try { ws.send(JSON.stringify({ type: 'ping' })) } catch {}
     }
     ws.onerror = () => {
-      setWsError('WebSocket connection error')
+      const msg = 'WebSocket connection error'
+      // Show a transient inline message and a sticky, dismissible banner
+      setWsError(msg)
+      setStickyError((prev) => prev || msg)
       setStreamText('')
-      onError?.('WebSocket connection error')
+      onError?.(msg)
       // Try to refresh the REST history in case server finished the message
       refetch()
     }
-    ws.onclose = (ev) => {
+    ws.onclose = (ev: CloseEvent) => {
       if (pingTimer) window.clearInterval(pingTimer)
       setStreamText('')
       // Only surface a user-visible notice after a couple failures; otherwise silently reconnect
       setReconnectAttempts((prev) => {
         const next = prev + 1
         if (next >= 2) {
-          setWsError('Connection closed. Reconnecting…')
+          const detail = `Connection closed (code ${ev.code}${ev.reason ? `, reason: ${ev.reason}` : ''}). Reconnecting…`
+          setWsError(detail)
+          setStickyError((p) => p || detail)
         }
         return next
       })
@@ -117,6 +123,21 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-6 relative">
+      {/* Sticky error banner (dismissible) */}
+      {stickyError && (
+        <div className="absolute left-0 right-0 top-2 z-20 flex justify-center px-4">
+          <div className="max-w-3xl w-full bg-red-500/10 border border-red-500/40 text-red-300 rounded-md px-3 py-2 text-sm flex items-start gap-3">
+            <span className="mt-[2px]">{stickyError}</span>
+            <button
+              onClick={() => setStickyError('')}
+              className="ml-auto text-red-300/80 hover:text-red-200"
+              aria-label="Dismiss error"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       <div className="relative z-10 mx-auto max-w-3xl text-[16px] sm:text-[17px] leading-[1.75]">
         {data?.items?.map((m) => (
           <MessageItem key={m.id} role={m.role as any} content={m.content} />
