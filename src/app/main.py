@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import asyncio
 import time
 from pathlib import Path
 import sys as _sys
+import logging
 
 # Ensure local src/ is importable so `agent.*` can be resolved when running from repo
 _src = Path(__file__).resolve().parents[1] / "src"
@@ -24,6 +25,28 @@ from .services.cleanup import cleanup_session_artifacts, safe_purge_runtime
 
 def create_app() -> FastAPI:
     app = FastAPI(title="TubeAgent API", version=os.getenv("APP_VERSION", "0.1.0"))
+
+    # Simple HTTP request logger middleware
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        start = time.time()
+        status = None
+        try:
+            response = await call_next(request)
+            status = getattr(response, "status_code", None)
+            return response
+        except Exception:
+            status = 500
+            raise
+        finally:
+            duration = time.time() - start
+            logging.getLogger("app.http").info(
+                "%s %s - %s (%.3fs)",
+                request.method,
+                request.url.path,
+                status if status is not None else "-",
+                duration,
+            )
 
     # CORS for local dev and typical frontend origins
     web_origin = os.getenv("WEB_ORIGIN", "http://localhost:5173")
