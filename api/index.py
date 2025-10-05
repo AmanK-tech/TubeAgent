@@ -26,8 +26,8 @@ from src.app.main import create_app  # noqa: E402
 
 
 app = create_app()
-_mangum = Mangum(app, lifespan="auto")
 
 
-def handler(event, context):
-    return _mangum(event, context)
+class handler(Mangum):
+    def __init__(self):
+        super().__init__(app, lifespan="auto")
