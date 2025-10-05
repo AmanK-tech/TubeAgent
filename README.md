@@ -47,10 +47,19 @@ Key technologies: FastAPI, Pydantic, WebSocket, yt‑dlp, ffmpeg/ffprobe, Google
 
 --------------------------------------------------------------------------------
 
+**Deploying to Vercel**
+- The serverless backend entrypoint lives in `api/index.py` (FastAPI wrapped with Mangum) and is wired up by `vercel.json`, which rewrites every request (including `/ws/chat/...`) to the handler.
+- Vercel installs the Python dependencies listed in `requirements.txt` automatically; keep the file in sync with your runtime packages when adding new tooling.
+- Configure secrets with `vercel env add` (at minimum `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, and optionally `YT_COOKIES_B64`). Frontend deployments can point `VITE_API_URL` at the Vercel backend URL.
+- The function defaults `RUNTIME_DIR` to `/tmp/tubeagent-runtime`; this space is ephemeral, so cached downloads only persist for the lifetime of a warm function instance.
+- Serverless executions have time and memory limits (currently 900s / 3GB per the config). Long-running ffmpeg/transcribe jobs should be monitored so they do not exhaust the quota.
+
+--------------------------------------------------------------------------------
+
 **How It Works**
 - Pipeline (planner + tools)
   - fetch_task → extract_audio → transcribe_asr → emit_output
-  - Planner decides whether to run tools step‑by‑step or delegate to function‑calling for complex analyses. See `src/agent/core/planner.py:1`, `src/agent/core/controller.py:1`.
+  - Planner decides whether to run tools step-by-step or delegate to function-calling for complex analyses. See `src/agent/core/planner.py:1`, `src/agent/core/controller.py:1`.
 - Short video fast path (URL‑direct)
   - For short videos, TubeAgent can call Gemini with the public URL to produce a quick take without local ASR (falls back on error). See `src/agent/core/toolkit.py:1` and `src/agent/tools/transcribe.py:430` (summarise_gemini) for global synthesis and URL‑direct integration.
 - Artifacts and caching
@@ -164,4 +173,3 @@ Notes
 **Acknowledgements**
 - Uses yt‑dlp and ffmpeg for robust media handling
 - Built with FastAPI, React, Tailwind, and modern LLM tooling
-

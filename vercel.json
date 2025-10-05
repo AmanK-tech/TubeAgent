@@ -1,0 +1,18 @@
+{
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.11",
+      "maxDuration": 900,
+      "memory": 3008
+    }
+  },
+  "env": {
+    "RUNTIME_DIR": "/tmp/tubeagent-runtime"
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/index"
+    }
+  ]
+}

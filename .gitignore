@@ -238,3 +238,6 @@ runtime/**
 *.webm
 
 /cleanup_gemini_files.py
+
+# Vercel project metadata
+/.vercel

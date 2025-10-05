@@ -50,7 +50,7 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
     }
     const ws = new WebSocket(wsUrl)
 
-    // Keepalive ping every ~15s to avoid idle timeouts behind proxies (Render free/edge)
+    // Keepalive ping every ~15s to avoid idle timeouts behind proxies (serverless hosts like Vercel)
     let pingTimer: number | undefined
     const startKeepAlive = () => {
       // window.setInterval returns number in browsers
