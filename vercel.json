@@ -2,7 +2,7 @@
   "functions": {
     "api/index.py": {
       "runtime": "python3.11",
-      "maxDuration": 900,
+      "maxDuration": 300,
       "memory": 3008
     }
   },

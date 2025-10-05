@@ -52,7 +52,7 @@ Key technologies: FastAPI, Pydantic, WebSocket, yt‑dlp, ffmpeg/ffprobe, Google
 - Vercel installs the Python dependencies listed in `requirements.txt` automatically; keep the file in sync with your runtime packages when adding new tooling.
 - Configure secrets with `vercel env add` (at minimum `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`, and optionally `YT_COOKIES_B64`). Frontend deployments can point `VITE_API_URL` at the Vercel backend URL.
 - The function defaults `RUNTIME_DIR` to `/tmp/tubeagent-runtime`; this space is ephemeral, so cached downloads only persist for the lifetime of a warm function instance.
-- Serverless executions have time and memory limits (currently 900s / 3GB per the config). Long-running ffmpeg/transcribe jobs should be monitored so they do not exhaust the quota.
+- Serverless executions have time and memory limits (currently 300s / 3GB on the default Vercel plan). Long-running ffmpeg/transcribe jobs may need tighter chunking or a higher Vercel plan.
 
 --------------------------------------------------------------------------------
 
