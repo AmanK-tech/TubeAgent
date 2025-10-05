@@ -1,18 +1,17 @@
 {
-  "functions": {
-    "api/index.py": {
-      "runtime": "python3.9",
-      "maxDuration": 300,
-      "memory": 2048
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
     }
-  },
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.py"
+    }
+  ],
   "env": {
     "RUNTIME_DIR": "/tmp/tubeagent-runtime"
-  },
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/api/index"
-    }
-  ]
+  }
 }
