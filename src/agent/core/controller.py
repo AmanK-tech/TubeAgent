@@ -14,7 +14,7 @@ from agent.core.planner import Planner
 
 # ---- small, local safeguards ----
 MAX_MSG_WINDOW = 24           # cap chat history to avoid context bloat
-MAX_TOOL_CONTENT = 8000       # cap tool payload echoed back to LLM
+MAX_TOOL_CONTENT = 8192       # cap tool payload echoed back to LLM
 
 
 def _as_tool_content(state, payload, *, limit: int = MAX_TOOL_CONTENT) -> str:

@@ -15,29 +15,42 @@ export const ChatPage: React.FC = () => {
 
   useEffect(() => {
     // Restore last active session if present; otherwise pick first or create one.
-    listSessions().then(async (res) => {
-      const stored = (() => {
-        try { return localStorage.getItem(ACTIVE_KEY) || undefined } catch { return undefined }
-      })()
-
-      let sid: string | undefined
-      if (stored && res.items.find((s) => s.id === stored)) {
-        sid = stored
-      } else if (res.items.length > 0) {
-        sid = res.items[0].id
-      } else {
-        const s = await createSession()
-        sid = s.id
-      }
-
-      setActive(sid)
+    (async () => {
       try {
-        const msgs = await listMessages(sid!)
-        setShowLanding((msgs.items || []).length === 0)
+        const res = await listSessions()
+        const stored = (() => {
+          try { return localStorage.getItem(ACTIVE_KEY) || undefined } catch { return undefined }
+        })()
+
+        let sid: string | undefined
+        if (stored && res.items.find((s) => s.id === stored)) {
+          sid = stored
+        } else if (res.items.length > 0) {
+          sid = res.items[0].id
+        } else {
+          const s = await createSession()
+          sid = s.id
+        }
+
+        setActive(sid)
+        try {
+          const msgs = await listMessages(sid!)
+          setShowLanding((msgs.items || []).length === 0)
+        } catch {
+          setShowLanding(true)
+        }
       } catch {
-        setShowLanding(true)
+        // If listing sessions fails (connectivity), try creating one so UI can enable input
+        try {
+          const s = await createSession()
+          setActive(s.id)
+          setShowLanding(true)
+        } catch {
+          // Leave input disabled; user will see landing and can retry after backend comes up
+          setShowLanding(true)
+        }
       }
-    })
+    })()
   }, [])
 
   // Persist active session id locally so a browser refresh restores the chat.
@@ -125,7 +138,7 @@ export const ChatPage: React.FC = () => {
 
       {/* Landing overlay on top when there are no messages */}
       {showLanding && (
-        <div className="absolute inset-0">
+        <div className="absolute inset-0 pointer-events-none">
           <Landing />
         </div>
       )}

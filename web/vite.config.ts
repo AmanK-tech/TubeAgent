@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import process from 'node:process'
 
 // Ignore broken pipe errors in dev when output is piped or a client aborts.
 try {
@@ -21,7 +22,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: process.env.VITE_API_URL || 'http://localhost:8000',
+        target: process.env.VITE_API_URL || 'http://localhost:5050',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
         // Quiet transient proxy errors from client/server aborts
@@ -37,7 +38,7 @@ export default defineConfig({
         },
       },
       '/ws': {
-        target: process.env.VITE_API_URL || 'http://localhost:8000',
+        target: process.env.VITE_API_URL || 'http://localhost:5050',
         changeOrigin: true,
         ws: true,
         rewrite: (path) => path,

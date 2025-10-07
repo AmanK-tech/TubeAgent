@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { listMessages } from '../../api/messages'
+import { API_BASE } from '../../api/client'
 import { MessageItem } from './MessageItem'
 
 type WSMessage = { type: 'connected' | 'token' | 'message_complete' | 'error' | string; text?: string; message?: string }
@@ -36,17 +37,16 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
 
   useEffect(() => {
     if (!sessionId) return
-    const apiBase = (import.meta.env.VITE_API_URL as string) || window.location.origin
+    const apiBase = API_BASE as string
     let wsUrl: string
-    try {
+    // If API_BASE is absolute, derive host from it; otherwise use current location
+    if (/^https?:\/\//i.test(apiBase)) {
       const u = new URL(apiBase)
       const proto = u.protocol === 'https:' ? 'wss:' : 'ws:'
       wsUrl = `${proto}//${u.host}/ws/chat/${sessionId}`
-    } catch {
-      // Fallback: strip scheme heuristically and rebuild origin
-      const isHttps = /^https:/i.test(apiBase)
-      const origin = apiBase.replace(/^https?:\/\//i, '').replace(/\/$/, '')
-      wsUrl = `${isHttps ? 'wss:' : 'ws:'}//${origin}/ws/chat/${sessionId}`
+    } else {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl = `${proto}//${window.location.host}/ws/chat/${sessionId}`
     }
     const ws = new WebSocket(wsUrl)
 
