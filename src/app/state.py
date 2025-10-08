@@ -90,5 +90,70 @@ class MemoryStore:
             s = self.sessions.get(sid)
             return dict(getattr(s, "agent_ctx", {}) or {}) if s else {}
 
+    # --- Lightweight progress tracking ---------------------------------------
+    def clear_progress(self, sid: str) -> None:
+        """Reset per-session task progress list.
+
+        Stored under agent_ctx["_progress"].
+        """
+        with self._lock:
+            s = self.sessions.get(sid)
+            if not s:
+                return
+            ctx = dict(getattr(s, "agent_ctx", {}) or {})
+            ctx["_progress"] = {"steps": [], "updated_at": time.time()}
+            s.agent_ctx = ctx
+
+    def begin_step(self, sid: str, name: str, note: str | None = None) -> None:
+        with self._lock:
+            s = self.sessions.get(sid)
+            if not s:
+                return
+            ctx = dict(getattr(s, "agent_ctx", {}) or {})
+            prog = dict(ctx.get("_progress", {}) or {})
+            steps = list(prog.get("steps", []) or [])
+            steps.append({
+                "name": name,
+                "status": "running",
+                "started_at": time.time(),
+                "ended_at": None,
+                "note": note or None,
+            })
+            prog["steps"] = steps
+            prog["updated_at"] = time.time()
+            ctx["_progress"] = prog
+            s.agent_ctx = ctx
+
+    def end_step(self, sid: str, name: str, *, ok: bool = True, note: str | None = None) -> None:
+        with self._lock:
+            s = self.sessions.get(sid)
+            if not s:
+                return
+            ctx = dict(getattr(s, "agent_ctx", {}) or {})
+            prog = dict(ctx.get("_progress", {}) or {})
+            steps = list(prog.get("steps", []) or [])
+            # Find most recent matching running step
+            for st in reversed(steps):
+                if isinstance(st, dict) and st.get("name") == name and st.get("status") == "running":
+                    st["status"] = "done" if ok else "error"
+                    st["ended_at"] = time.time()
+                    if note:
+                        st["note"] = note
+                    break
+            prog["steps"] = steps
+            prog["updated_at"] = time.time()
+            ctx["_progress"] = prog
+            s.agent_ctx = ctx
+
+    def get_progress(self, sid: str) -> dict:
+        with self._lock:
+            s = self.sessions.get(sid)
+            if not s:
+                return {"steps": []}
+            ctx = getattr(s, "agent_ctx", {}) or {}
+            prog = dict(ctx.get("_progress", {}) or {})
+            steps = list(prog.get("steps", []) or [])
+            return {"steps": steps, "updated_at": prog.get("updated_at")}
+
 
 store = MemoryStore()

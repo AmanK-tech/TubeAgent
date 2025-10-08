@@ -38,6 +38,14 @@ async def get_session(session_id: str) -> SessionSchema:
     return SessionSchema(**s.__dict__)
 
 
+@router.get("/{session_id}/progress")
+async def get_session_progress(session_id: str) -> dict:
+    s = store.get_session(session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return store.get_progress(session_id)
+
+
 @router.delete("/{session_id}")
 async def delete_session(session_id: str, bg: BackgroundTasks) -> dict:
     s = store.delete_session(session_id)

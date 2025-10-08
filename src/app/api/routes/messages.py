@@ -93,6 +93,10 @@ async def post_message(session_id: str, payload: PostMessageRequest) -> PostMess
                 pass
 
     # Fire and forget
+    try:
+        store.clear_progress(session_id)
+    except Exception:
+        pass
     asyncio.create_task(_run())
 
     return PostMessageResponse(message_id=user_msg.id)

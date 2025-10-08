@@ -197,6 +197,7 @@ def run_session(
     system_instruction: Optional[str] = None,
     tool_choice: Optional[object] = None,
     max_output_tokens: Optional[int] = None,
+    progress_cb: Optional[object] = None,
 ) -> str:
     """Run a function-calling session with the LLM and our tool dispatcher.
 
@@ -271,6 +272,15 @@ def run_session(
                     raise ToolError(f"Repeat tool loop detected: {name}", tool_name="controller")
 
                 # Execute tool (with retries) and cap payload size back to LLM
+                # progress: start
+                try:
+                    if callable(progress_cb):
+                        try:
+                            progress_cb("start", {"tool": name, "args": args})
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
                 tool_result = _safe_dispatch(state, name, args)
                 # Handle URL-direct failures by falling back to transcribe_asr before bubbling error
                 try:
@@ -288,14 +298,33 @@ def run_session(
                                 _ = _safe_dispatch(state, "extract_audio", {"input_url": src_url})
                             fb = _safe_dispatch(state, "transcribe_asr", {"user_req": user_text})
                             if (fb or {}).get("ok") and isinstance(fb.get("result"), str):
+                                # Mark the summarise_url_direct step as finished before early return
+                                try:
+                                    if callable(progress_cb):
+                                        progress_cb("end", {"tool": name})
+                                except Exception:
+                                    pass
                                 final_text = fb.get("result") or ""
                                 _append_and_save_history(state, user_text, final_text)
                                 return final_text
                         err = (tool_result or {}).get("error")
                         msg_err = (err or {}).get("message") if isinstance(err, dict) else (str(err) if err is not None else "Tool failed")
+                        # progress: error
+                        try:
+                            if callable(progress_cb):
+                                progress_cb("error", {"tool": name, "note": msg_err})
+                        except Exception:
+                            pass
                         raise ToolError(msg_err or f"{name} failed", tool_name=name)
                 except ToolError:
                     raise
+                except Exception:
+                    pass
+
+                # progress: end
+                try:
+                    if callable(progress_cb):
+                        progress_cb("end", {"tool": name})
                 except Exception:
                     pass
 
@@ -340,6 +369,7 @@ def run_hybrid_session(
     tool_choice: Optional[object] = None,
     max_output_tokens: Optional[int] = None,
     max_steps: Optional[int] = None,
+    progress_cb: Optional[object] = None,
 ) -> str:
     """Hybrid orchestration: planner routing with fallback to function-calling.
 
@@ -366,6 +396,7 @@ def run_hybrid_session(
                 system_instruction=system_instruction,
                 tool_choice=tool_choice,
                 max_output_tokens=max_output_tokens,
+                progress_cb=progress_cb,
             )
         if act == "final":
             final_text = route.get("content") or ""
@@ -382,9 +413,21 @@ def run_hybrid_session(
                 raise ToolError(f"Repeat tool loop detected: {name}", tool_name="controller")
 
             # Execute the tool via dispatcher
+            # progress: start before execution
+            try:
+                if callable(progress_cb):
+                    progress_cb("start", {"tool": name, "args": params})
+            except Exception:
+                pass
             try:
                 res = dispatch_tool_call(state, name, params)
             except Exception as e:
+                # progress: error on dispatch failure
+                try:
+                    if callable(progress_cb):
+                        progress_cb("error", {"tool": name, "note": str(e)})
+                except Exception:
+                    pass
                 # Normalize by delegating to tools path on planner execution error
                 return run_session(
                     state,
@@ -392,6 +435,7 @@ def run_hybrid_session(
                     system_instruction=system_instruction,
                     tool_choice=tool_choice,
                     max_output_tokens=max_output_tokens,
+                    progress_cb=progress_cb,
                 )
 
             # Handle tool failures with targeted fallback for summarise_url_direct
@@ -410,12 +454,31 @@ def run_hybrid_session(
                             _ = dispatch_tool_call(state, "extract_audio", {"input_url": src_url})
                         fb = dispatch_tool_call(state, "transcribe_asr", {"user_req": user_text})
                         if (fb or {}).get("ok") and isinstance(fb.get("result"), str):
+                            # Mark the summarise_url_direct step as finished before early return
+                            try:
+                                if callable(progress_cb):
+                                    progress_cb("end", {"tool": name})
+                            except Exception:
+                                pass
                             return fb.get("result") or ""
                     err = (res or {}).get("error")
                     msg_err = (err or {}).get("message") if isinstance(err, dict) else (str(err) if err is not None else "Tool failed")
+                    # progress: error
+                    try:
+                        if callable(progress_cb):
+                            progress_cb("error", {"tool": name, "note": msg_err})
+                    except Exception:
+                        pass
                     raise ToolError(msg_err or f"{name} failed", tool_name=name)
             except ToolError:
                 raise
+            except Exception:
+                pass
+
+            # progress: end
+            try:
+                if callable(progress_cb):
+                    progress_cb("end", {"tool": name})
             except Exception:
                 pass
 

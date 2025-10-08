@@ -5,6 +5,7 @@ import { Landing } from '../components/chat/Landing'
 import { listSessions, createSession, closeSession } from '../api/sessions'
 import { listMessages, sendMessage } from '../api/messages'
 import ExpandableInput from '../components/ui/ExpandableInput'
+import { TaskBar } from '../components/chat/TaskBar'
 
 export const ChatPage: React.FC = () => {
   const qc = useQueryClient()
@@ -113,8 +114,10 @@ export const ChatPage: React.FC = () => {
         }`}
       >
         <div className="pointer-events-auto">
+          {/* Task progress over input while generating */}
+          <TaskBar sessionId={active} active={inFlight} />
           <ExpandableInput
-            placeholder="Ask about any YouTube video, channel, or topic..."
+            placeholder="Ask about any YouTube video — paste a link…"
             onSend={async (t) => {
               if (!active) return
               // include user_req for backend routing parity with Composer

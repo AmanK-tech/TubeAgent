@@ -20,7 +20,20 @@ async def chat_ws(ws: WebSocket, session_id: str):
             # Receive a text frame; tolerate non-JSON frames and transient errors.
             try:
                 raw = await ws.receive_text()
-            except WebSocketDisconnect:
+            except WebSocketDisconnect as e:
+                # Normal disconnect path (client closed or network drop)
+                try:
+                    logger.info("WebSocket disconnect (session=%s, code=%s)", session_id, getattr(e, "code", None))
+                except Exception:
+                    pass
+                break
+            except RuntimeError as e:
+                # Starlette raises a RuntimeError with a generic message when the socket
+                # is not in CONNECTED state (either not yet accepted or already closed).
+                try:
+                    logger.info("WebSocket not connected/closed (session=%s): %s", session_id, str(e))
+                except Exception:
+                    pass
                 break
             except Exception:
                 # Log and continue rather than tearing down the socket immediately.

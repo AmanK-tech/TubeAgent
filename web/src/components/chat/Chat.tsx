@@ -20,6 +20,7 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
   const [wsNonce, setWsNonce] = useState(0)
   const mountedRef = useRef<boolean>(true)
   const [reconnectAttempts, setReconnectAttempts] = useState(0)
+  const [everConnected, setEverConnected] = useState(false)
 
   useEffect(() => {
     mountedRef.current = true
@@ -38,6 +39,8 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
   useEffect(() => {
     if (!sessionId) return
     const apiBase = API_BASE as string
+    // Reset connection state for this WS instance
+    setEverConnected(false)
     let wsUrl: string
     // If API_BASE is absolute, derive host from it; otherwise use current location
     if (/^https?:\/\//i.test(apiBase)) {
@@ -67,21 +70,27 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
     ws.onopen = () => {
       setWsError('')
       setReconnectAttempts(0)
+      setStickyError('')
+      setEverConnected(true)
       startKeepAlive()
       // Send an immediate ping to keep upstream proxies from idling us out
       try { ws.send(JSON.stringify({ type: 'ping' })) } catch {}
     }
-    ws.onerror = () => {
+    ws.onerror = (ev: Event) => {
+      try { console.error('[ws] error event', ev) } catch {}
       const msg = 'WebSocket connection error'
-      // Show a transient inline message and a sticky, dismissible banner
+      // Show a transient inline message
       setWsError(msg)
-      setStickyError((prev) => prev || msg)
+      // Only show a sticky banner after we've connected before, or after a couple retries,
+      // or while a user-triggered request is in flight (to surface meaningful failures).
+      setStickyError((prev) => (prev || (everConnected || reconnectAttempts >= 2 || !!loading ? msg : '')))
       setStreamText('')
       onError?.(msg)
       // Try to refresh the REST history in case server finished the message
       refetch()
     }
     ws.onclose = (ev: CloseEvent) => {
+      try { console.debug('[ws] close', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean }) } catch {}
       if (pingTimer) window.clearInterval(pingTimer)
       setStreamText('')
       // Only surface a user-visible notice after a couple failures; otherwise silently reconnect
@@ -107,16 +116,24 @@ export const Chat: React.FC<{ sessionId?: string; onMessageComplete?: () => void
     ws.onmessage = (evt) => {
       try {
         const msg: WSMessage = JSON.parse(evt.data)
-        if (msg.type === 'token' && msg.text) {
+        if (msg.type === 'connected') {
+          // Clear any sticky banner once we know the server accepted the socket
+          setWsError('')
+          setStickyError('')
+          setEverConnected(true)
+        } else if (msg.type === 'token' && msg.text) {
           setStreamText((s) => s + msg.text)
         } else if (msg.type === 'message_complete') {
           setStreamText('')
           refetch()
           setWsError('')
+          setStickyError('')
           onMessageComplete?.()
         } else if (msg.type === 'error') {
           setStreamText('')
           setWsError(msg.message || 'An error occurred while generating the response.')
+          // For server-side errors, show a sticky banner once surfaced
+          setStickyError((prev) => prev || (msg.message || 'An error occurred while generating the response.'))
           onError?.(msg.message)
           // refresh to at least show the user message that was posted
           refetch()

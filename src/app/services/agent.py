@@ -63,6 +63,24 @@ class AgentService:
         delay_s: float = 0.0,
     ) -> AsyncGenerator[str, None]:
         state = self._new_state(session_id)
+        # Initialize progress for this turn
+        try:
+            store.clear_progress(session_id)
+        except Exception:
+            pass
+        # Progress hook invoked from controller (runs in worker thread)
+        def _progress(event: str, data: dict | None = None) -> None:
+            name = (data or {}).get("tool") if isinstance(data, dict) else None
+            note = (data or {}).get("note") if isinstance(data, dict) else None
+            try:
+                if event == "start" and name:
+                    store.begin_step(session_id, str(name), str(note) if note else None)
+                elif event == "end" and name:
+                    store.end_step(session_id, str(name), ok=True, note=str(note) if note else None)
+                elif event == "error" and name:
+                    store.end_step(session_id, str(name), ok=False, note=str(note) if note else None)
+            except Exception:
+                pass
         # Run synchronously in thread to avoid blocking loop
         loop = asyncio.get_running_loop()
         final_text: str = await loop.run_in_executor(
@@ -71,6 +89,7 @@ class AgentService:
                 state,
                 user_text,
                 system_instruction=system_instruction,
+                progress_cb=_progress,
             ),
         )
         # Persist minimal context for follow-ups
