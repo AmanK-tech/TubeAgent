@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Any, Dict, Optional
 
 from agent.core.state import AgentState
 from agent.errors import ToolError
+
+logger = logging.getLogger(__name__)
 
 
 def _slugify(s: str, *, max_len: int = 80) -> str:
@@ -206,12 +209,12 @@ def emit_output(
     if "console" in targets:
         try:
             preview = clean_text[: max(0, int(preview_chars))]
-            # Avoid excessive console noise in library context; print concise lines
-            print(f"Emit: wrote deliverables in {base_dir}")
+            # Log deliverables info instead of printing to console
+            logger.info("Emit: wrote deliverables in %s", base_dir)
             if outputs:
                 primary = outputs.get(preferred_ext) or next(iter(outputs.values()))
-                print(f"Primary: {primary}")
-            print("--- Preview ---\n" + (preview + ("…" if len(clean_text) > len(preview) else "")))
+                logger.info("Primary: %s", primary)
+            logger.info("--- Preview ---\n%s", preview + ("…" if len(clean_text) > len(preview) else ""))
         except Exception:
             pass
 

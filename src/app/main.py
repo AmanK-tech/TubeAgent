@@ -24,6 +24,14 @@ from .services.cleanup import cleanup_session_artifacts, safe_purge_runtime
 
 
 def create_app() -> FastAPI:
+    # Configure logging for the application
+    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level=getattr(logging, log_level, logging.INFO),
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    
     app = FastAPI(title="TubeAgent API", version=os.getenv("APP_VERSION", "0.1.0"))
 
     # Simple HTTP request logger middleware

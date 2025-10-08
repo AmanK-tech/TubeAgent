@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Any, Dict, List, Optional
 from agent.core.state import AgentState, Chunk
 from agent.errors import ToolError
 from agent.contextengineering import allocate_tokens, to_generation_config
+
+logger = logging.getLogger(__name__)
 
 try:
     from google import genai
@@ -26,10 +29,10 @@ def _load_manifest(path: Path) -> Dict[str, Any]:
 def _find_latest_extract_manifest(runtime_dir: Path) -> Optional[Path]:
     """Find the most recent extract manifest file."""
     base = Path(runtime_dir) / "cache" / "extract"
-    print(f"DEBUG: Looking for manifests in: {base.resolve()}")
+    logger.debug("Looking for manifests in: %s", base.resolve())
     
     if not base.exists():
-        print(f"DEBUG: Extract cache directory does not exist: {base}")
+        logger.debug("Extract cache directory does not exist: %s", base)
         return None
         
     newest: tuple[float, Optional[Path]] = (0.0, None)
@@ -40,20 +43,20 @@ def _find_latest_extract_manifest(runtime_dir: Path) -> Optional[Path]:
             continue
         found_dirs.append(str(child))
         mp = child / "extract_audio.manifest.json"
-        print(f"DEBUG: Checking manifest path: {mp.resolve()}")
+        logger.debug("Checking manifest path: %s", mp.resolve())
         
         if mp.exists():
             try:
                 mt = mp.stat().st_mtime
-                print(f"DEBUG: Found manifest with mtime {mt}: {mp}")
+                logger.debug("Found manifest with mtime %s: %s", mt, mp)
                 if mt >= newest[0]:
                     newest = (mt, mp)
             except Exception as e:
-                print(f"DEBUG: Error getting mtime for {mp}: {e}")
+                logger.debug("Error getting mtime for %s: %s", mp, e)
                 mt = 0.0
     
-    print(f"DEBUG: Found directories in extract cache: {found_dirs}")
-    print(f"DEBUG: Selected manifest: {newest[1]}")
+    logger.debug("Found directories in extract cache: %s", found_dirs)
+    logger.debug("Selected manifest: %s", newest[1])
     return newest[1]
 
 
@@ -172,8 +175,8 @@ def transcribe_task(
     runtime_dir = Path(runtime_dir)  # Ensure it's a Path object
     
     # Debug: show resolved locations for manifest discovery
-    print(f"DEBUG: CWD = {Path.cwd().resolve()}")
-    print(f"DEBUG: runtime_dir = {runtime_dir.resolve()}")
+    logger.debug("CWD = %s", Path.cwd().resolve())
+    logger.debug("runtime_dir = %s", runtime_dir.resolve())
     
     # Resolve manifest with improved logic
     manifest_p: Optional[Path] = None
@@ -181,9 +184,9 @@ def transcribe_task(
     # 1. First check if explicit manifest_path was provided
     if manifest_path:
         manifest_p = Path(manifest_path).resolve()
-        print(f"DEBUG: Using explicit manifest_path: {manifest_p}")
+        logger.debug("Using explicit manifest_path: %s", manifest_p)
         if not manifest_p.exists():
-            print(f"DEBUG: Explicit manifest path does not exist: {manifest_p}")
+            logger.debug("Explicit manifest path does not exist: %s", manifest_p)
             manifest_p = None
     
     # 2. Check state artifacts for manifest path
@@ -191,21 +194,21 @@ def transcribe_task(
         mp = state.artifacts.get("extract_audio", {}).get("manifest_path")
         if mp:
             manifest_p = Path(mp).resolve()
-            print(f"DEBUG: Using manifest from state artifacts: {manifest_p}")
+            logger.debug("Using manifest from state artifacts: %s", manifest_p)
             if not manifest_p.exists():
-                print(f"DEBUG: Manifest from artifacts does not exist: {manifest_p}")
+                logger.debug("Manifest from artifacts does not exist: %s", manifest_p)
                 manifest_p = None
     
     # 3. Search for latest manifest if still not found
     if not manifest_p:
-        print("DEBUG: Searching for latest manifest...")
+        logger.debug("Searching for latest manifest...")
         # Add a small delay to ensure file system operations are complete
         time.sleep(1)
         manifest_p = _find_latest_extract_manifest(runtime_dir)
         if manifest_p:
-            print(f"DEBUG: Found latest manifest: {manifest_p}")
+            logger.debug("Found latest manifest: %s", manifest_p)
         else:
-            print("DEBUG: No manifest found in search")
+            logger.debug("No manifest found in search")
     
     # 4. Final check and error handling
     if not manifest_p or not manifest_p.exists():
@@ -232,7 +235,7 @@ def transcribe_task(
         
         raise ToolError(error_msg, tool_name=tool)
 
-    print(f"DEBUG: Using manifest file: {manifest_p}")
+    logger.debug("Using manifest file: %s", manifest_p)
 
     manifest = _load_manifest(manifest_p)
     res = manifest.get("result", {})

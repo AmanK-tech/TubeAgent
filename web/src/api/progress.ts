@@ -2,7 +2,7 @@ import { api } from './client'
 
 export type ProgressStep = {
   name: string
-  status: 'running' | 'done' | 'error'
+  status: 'running' | 'done' | 'error' | 'pending'
   started_at?: number | null
   ended_at?: number | null
   note?: string | null
