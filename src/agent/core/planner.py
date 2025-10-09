@@ -369,7 +369,7 @@ class Planner:
         # Early fast-paths: if transcript exists and it is a direct follow-up/search/fact request, go straight to global synthesis
         has_transcript = bool(getattr(state, "transcript", None) or getattr(state, "chunks", None))
         # URL-direct path: if we already have a video with known short duration and no transcript yet,
-        # call summarise_url_direct automatically (duration threshold via env URL_DIRECT_MINUTES, default 20)
+        # call summarise_url_direct automatically (duration threshold via env GLOBAL_DIRECT_MINUTES_LIMIT, default 25)
         try:
             vid = getattr(state, "video", None)
             dur_s = float(getattr(vid, "duration_s", 0) or 0)
@@ -377,9 +377,9 @@ class Planner:
         except Exception:
             dur_s, src_url = 0.0, ""
         try:
-            direct_limit_min = float(os.getenv("URL_DIRECT_MINUTES", "20") or 20.0)
+            direct_limit_min = float(os.getenv("GLOBAL_DIRECT_MINUTES_LIMIT", "25") or 25.0)
         except Exception:
-            direct_limit_min = 20.0
+            direct_limit_min = 25.0
         if (not has_transcript) and src_url and dur_s and (dur_s <= direct_limit_min * 60.0):
             return {"action": "tool_call", "tool": "summarise_url_direct", "arguments": {"url": src_url, "user_req": user_text}}
         if has_transcript and intent in {"question", "search", "time_based", "fact_extraction", "comparison", "analysis"}:

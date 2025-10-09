@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -63,13 +64,13 @@ def _find_latest_extract_manifest(runtime_dir: Path) -> Optional[Path]:
 def _poll_file_active(client, name: str, max_wait: float = 300.0, poll_interval: Optional[float] = None) -> bool:
     """Poll a Gemini file handle until it becomes ACTIVE or FAILED.
 
-    Respects GEMINI_FILE_POLL_INTERVAL (seconds) if provided; defaults to 2s.
+    Respects GEMINI_FILE_POLL_INTERVAL (seconds) if provided; defaults to 0.5s (optimized).
     """
     if poll_interval is None:
         try:
-            poll_interval = float(os.getenv("GEMINI_FILE_POLL_INTERVAL", "2.0") or 2.0)
+            poll_interval = float(os.getenv("GEMINI_FILE_POLL_INTERVAL", "0.5") or 0.5)
         except Exception:
-            poll_interval = 2.0
+            poll_interval = 0.5
     if poll_interval <= 0:
         poll_interval = 2.0
 
@@ -274,14 +275,17 @@ def transcribe_task(
     chunk_results: List[Chunk] = []
     artifacts: Dict[str, Any] = {"manifest_path": str(manifest_p), "gemini_model": gemini_model, "chunks": []}
 
-    # Process chunks sequentially (keep simple; concurrency possible later)
-    for ch in chunks_meta:
+    # Helper function to process a single chunk
+    def _process_chunk(ch: dict) -> tuple[int, float, float, str, str, str, dict]:
+        """Process a single chunk: upload, poll, transcribe. Returns (idx, start_s, end_s, text, summary, media_path, chunk_artifact)"""
         idx = int(ch.get("idx", 0))
         start_s = float(ch.get("start_sec", 0.0))
         end_s = float(ch.get("end_sec", max(start_s, 0.0)))
         media_path = (ch.get("path") if prefer_wav else (ch.get("video_path") or ch.get("path")))
         if not media_path or not Path(media_path).exists():
             raise ToolError(f"Chunk not found: {media_path}", tool_name=tool)
+        
+        logger.debug("Processing chunk %d (%.1fs-%.1fs)", idx, start_s, end_s)
 
         # Upload
         try:
@@ -290,7 +294,7 @@ def transcribe_task(
             raise ToolError(f"Gemini file upload failed for chunk {idx}: {e}", tool_name=tool)
 
         # Poll until ACTIVE (early check on immediate state)
-        max_wait = float(os.getenv("GEMINI_FILE_WAIT_TIMEOUT", "300"))
+        max_wait = float(os.getenv("GEMINI_FILE_WAIT_TIMEOUT", "60"))  # Optimized: reduced from 300 to 60
         state0 = getattr(myfile, "state", None)
         state0_name = getattr(state0, "name", None) or str(state0 or "").upper()
         if state0_name == "ACTIVE":
@@ -403,24 +407,61 @@ def transcribe_task(
         except Exception:
             pass
 
-        combined_parts.append(text)
-        chunk_results.append(Chunk(start_s=int(start_s), end_s=int(end_s), text=text, summary=(summary_text or None)))
-        artifacts["chunks"].append(
-            {
-                "idx": idx,
-                "start_sec": start_s,
-                "end_sec": end_s,
-                "video_path": ch.get("video_path"),
-                "used_media_path": media_path,
-                "used_media_kind": ("audio_wav" if str(media_path).lower().endswith(".wav") else "video"),
-                "text_path": str(txt_path),
-                "json_path": str(json_path),
-                "summary_path": str(sum_path),
-                "gemini_file_name": getattr(myfile, "name", None) or getattr(myfile, "id", None),
-                "chars": len(text),
-                "summary_chars": len(summary_text or ""),
-            }
-        )
+        # Build chunk artifact dict
+        chunk_artifact = {
+            "idx": idx,
+            "start_sec": start_s,
+            "end_sec": end_s,
+            "video_path": ch.get("video_path"),
+            "used_media_path": media_path,
+            "used_media_kind": ("audio_wav" if str(media_path).lower().endswith(".wav") else "video"),
+            "text_path": str(txt_path),
+            "json_path": str(json_path),
+            "summary_path": str(sum_path),
+            "gemini_file_name": getattr(myfile, "name", None) or getattr(myfile, "id", None),
+            "chars": len(text),
+            "summary_chars": len(summary_text or ""),
+        }
+        
+        logger.debug("Completed chunk %d: %d chars", idx, len(text))
+        return (idx, start_s, end_s, text, summary_text, media_path, chunk_artifact)
+
+    # Process chunks with concurrency for better performance
+    max_workers = int(os.getenv("TRANSCRIBE_CONCURRENCY", "4"))  # Default 4 workers
+    logger.info("Processing %d chunks with concurrency=%d", len(chunks_meta), max_workers)
+    
+    if len(chunks_meta) == 1 or max_workers <= 1:
+        # Single chunk or no concurrency: process sequentially
+        for ch in chunks_meta:
+            idx, start_s, end_s, text, summary_text, media_path, chunk_artifact = _process_chunk(ch)
+            combined_parts.append(text)
+            chunk_results.append(Chunk(start_s=int(start_s), end_s=int(end_s), text=text, summary=(summary_text or None)))
+            artifacts["chunks"].append(chunk_artifact)
+    else:
+        # Multiple chunks: use concurrent processing
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all chunks for processing
+            future_to_chunk = {executor.submit(_process_chunk, ch): ch for ch in chunks_meta}
+            
+            # Collect results as they complete
+            chunk_data = []
+            for future in as_completed(future_to_chunk):
+                try:
+                    result = future.result()
+                    chunk_data.append(result)
+                except Exception as e:
+                    ch = future_to_chunk[future]
+                    idx = ch.get("idx", "?")
+                    raise ToolError(f"Chunk {idx} processing failed: {e}", tool_name=tool)
+            
+            # Sort by index to maintain order
+            chunk_data.sort(key=lambda x: x[0])
+            
+            # Build results in order
+            for idx, start_s, end_s, text, summary_text, media_path, chunk_artifact in chunk_data:
+                combined_parts.append(text)
+                chunk_results.append(Chunk(start_s=int(start_s), end_s=int(end_s), text=text, summary=(summary_text or None)))
+                artifacts["chunks"].append(chunk_artifact)
 
     # Combined transcript
     combined_text = "\n\n".join([p for p in combined_parts if p])
