@@ -8,6 +8,14 @@ from pathlib import Path
 import sys as _sys
 import logging
 
+# Load environment variables from .env file
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv not available, will rely on system environment variables
+    pass
+
 # Ensure local src/ is importable so `agent.*` can be resolved when running from repo
 _src = Path(__file__).resolve().parents[1] / "src"
 if str(_src) not in _sys.path:

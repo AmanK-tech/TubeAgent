@@ -19,14 +19,33 @@ router = APIRouter()
 
 
 @router.post("/", response_model=CreateSessionResponse)
+@router.post("", response_model=CreateSessionResponse)
 async def create_session(payload: CreateSessionRequest | None = None) -> CreateSessionResponse:
     s = store.create_session(title=(payload.title if payload else None))
     return CreateSessionResponse(id=s.id, title=s.title, created_at=s.created_at)
 
 
 @router.get("/", response_model=ListSessionsResponse)
+@router.get("", response_model=ListSessionsResponse)
 async def list_sessions() -> ListSessionsResponse:
-    items = [SessionSchema(**s.__dict__) for s in store.list_sessions()]
+    items = []
+    for s in store.list_sessions():
+        session_data = {
+            "id": s.id,
+            "title": s.title,
+            "created_at": s.created_at,
+            "updated_at": s.updated_at,
+            "messages": [
+                {
+                    "id": m.id,
+                    "role": m.role,
+                    "content": m.content,
+                    "created_at": m.created_at
+                }
+                for m in (s.messages or [])
+            ]
+        }
+        items.append(SessionSchema(**session_data))
     return ListSessionsResponse(items=items)
 
 
@@ -35,7 +54,23 @@ async def get_session(session_id: str) -> SessionSchema:
     s = store.get_session(session_id)
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
-    return SessionSchema(**s.__dict__)
+
+    session_data = {
+        "id": s.id,
+        "title": s.title,
+        "created_at": s.created_at,
+        "updated_at": s.updated_at,
+        "messages": [
+            {
+                "id": m.id,
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at
+            }
+            for m in (s.messages or [])
+        ]
+    }
+    return SessionSchema(**session_data)
 
 
 @router.get("/{session_id}/progress")

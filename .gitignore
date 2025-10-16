@@ -241,3 +241,5 @@ runtime/**
 
 # Vercel project metadata
 /.vercel
+/.claude
+/.PERFORMANCE_OPTIMIZATIONS

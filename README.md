@@ -30,18 +30,36 @@ Agentic YouTube video summarizer with a FastAPI backend and a modern React (Vite
 - `ffmpeg` and `ffprobe` available on `PATH`
 - API keys: `DEEPSEEK_API_KEY` (planning/tools) and `GOOGLE_API_KEY` (ASR/global summary)
 
+### Environment Setup
+1. Copy the example environment file and add your API keys:
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` and add your actual API keys:
+   ```env
+   DEEPSEEK_API_KEY=your_deepseek_api_key_here
+   GOOGLE_API_KEY=your_google_api_key_here
+   YT_COOKIES_FROM_BROWSER=chrome  # Automatically extracts cookies from Chrome
+   ```
+
+   **Important**: The `.env` file contains sensitive API keys and is already in `.gitignore` to prevent accidental commits.
+
 ### Backend (API)
 1. Create a virtual environment and install dependencies:
    ```bash
    python -m venv venv
    source venv/bin/activate
-   pip install fastapi uvicorn[standard] pydantic PyYAML yt-dlp google-genai google-generativeai audioop-lts
+   pip install -r requirements.txt
    ```
 2. Run the API (CORS allows the web dev server by default):
    ```bash
    uvicorn src.app.main:app --reload --port 5050
    ```
    Or run `make api` (uses `PYTHONPATH=./src`, see `Makefile:1`).
+   Or use the convenient startup script:
+   ```bash
+   ./start_backend.sh
+   ```
 
 ### Frontend (Web)
 1. Install dependencies and start the dev server:
@@ -53,6 +71,18 @@ Agentic YouTube video summarizer with a FastAPI backend and a modern React (Vite
 2. The web app uses `VITE_API_URL` or `http://localhost:5050` by default (`web/src/api/client.ts:1`). Set `VITE_API_URL` before `npm run dev` if the API runs elsewhere.
 3. Open `http://localhost:5173` and navigate to `/chat`.
 
+### Quick Start (Both Servers)
+For convenience, you can start both frontend and backend simultaneously:
+```bash
+./start_all.sh
+```
+This script will:
+- Set up the virtual environment and install dependencies
+- Start the backend on http://localhost:5050
+- Start the frontend on http://localhost:5173
+- Provide logs for both servers
+- Handle graceful shutdown when you press Ctrl+C
+
 ### First Run
 - Paste a public YouTube URL and ask, for example, “Give me a concise summary and key takeaways.”
 - Watch tokens stream into the UI. The first run downloads media and builds caches under `runtime/`.
@@ -60,7 +90,7 @@ Agentic YouTube video summarizer with a FastAPI backend and a modern React (Vite
 ## Local Runtime Notes
 - TubeAgent ships without cloud/serverless deployment scaffolding; run the backend locally via the Quick Start commands above.
 - Runtime artifacts live under `./runtime` by default; override with `RUNTIME_DIR` or `TUBEAGENT_RUNTIME_DIR` if you prefer a different path.
-- Export required API keys (e.g., `DEEPSEEK_API_KEY`, `GOOGLE_API_KEY`) in your shell before launching the backend.
+- API keys are automatically loaded from the `.env` file. The file is git-ignored for security.
 
 ## How It Works
 

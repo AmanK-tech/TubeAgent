@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getProgress, type ProgressStep } from '../../api/progress'
 import { listMessages } from '../../api/messages'
+import { getStorage } from '../../utils/storage'
 import { CheckCircle2, Loader2, XCircle, ChevronDown, Circle } from 'lucide-react'
 
 type Props = {
@@ -28,21 +29,21 @@ function labelFor(step: ProgressStep | { name: string; status: string }): string
 export const TaskBar: React.FC<Props> = ({ sessionId, active }) => {
   const [collapsed, setCollapsed] = useState(false)
   const COLLAPSE_KEY = 'tubeagent.taskbar.collapsed'
+  const storage = getStorage()
 
   // Restore collapse state (per session if available)
   useEffect(() => {
     const key = sessionId ? `${COLLAPSE_KEY}.${sessionId}` : COLLAPSE_KEY
-    try {
-      const v = localStorage.getItem(key)
-      if (v !== null) setCollapsed(v === '1')
-    } catch {}
-  }, [sessionId])
+    const v = storage.getItem(key)
+    if (v !== null) setCollapsed(v === '1')
+  }, [sessionId, storage])
 
   // Persist collapse state
   useEffect(() => {
     const key = sessionId ? `${COLLAPSE_KEY}.${sessionId}` : COLLAPSE_KEY
-    try { localStorage.setItem(key, collapsed ? '1' : '0') } catch {}
-  }, [collapsed, sessionId])
+    storage.setItem(key, collapsed ? '1' : '0')
+  }, [collapsed, sessionId, storage])
+
   const { data: progressData } = useQuery({
     queryKey: ['progress', sessionId],
     queryFn: () => getProgress(sessionId!),
@@ -58,10 +59,11 @@ export const TaskBar: React.FC<Props> = ({ sessionId, active }) => {
   })
 
   const steps = progressData?.steps ?? []
-  if (!active && steps.length === 0) return null
 
   // Check if there's an assistant response
   const hasAssistantResponse = messagesData?.items?.some((msg: any) => msg.role === 'assistant') ?? false
+
+  if (!active) return null
 
   // Detect which flow is being used based on actual steps
   const detectedFlow = useMemo(() => {
